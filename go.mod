@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang v0.0.0-20230613000214-83d1aa25594e
-	github.com/gin-contrib/multitemplate v0.0.0-20230212012517-45920c92c271
+	github.com/gin-contrib/multitemplate v1.0.1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/go-cmp v0.6.0
 	github.com/joho/godotenv v1.5.1
