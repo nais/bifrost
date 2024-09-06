@@ -65,3 +65,9 @@ networkPolicy:
   allowDNS: true
   # apiServerCIDR is the CIDR of the Kubernetes API server.
   # apiServerCIDR: 1.2.3.4/32
+
+metrics:
+  enabled: false
+
+alerts:
+  enabled: true
