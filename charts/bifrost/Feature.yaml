@@ -1,7 +1,6 @@
 dependencies:
   - allOf:
       - loadbalancer
-      - certificates
       - monitoring
 
 environmentKinds:
