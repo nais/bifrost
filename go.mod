@@ -7,7 +7,7 @@ require (
 	github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang v0.0.0-20230613000214-83d1aa25594e
 	github.com/gin-contrib/multitemplate v1.0.1
 	github.com/gin-gonic/gin v1.10.0
-	github.com/google/go-cmp v0.6.0
+	github.com/google/go-cmp v0.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/nais/unleasherator v0.0.0-20240204195504-ef964277c0b3
 	github.com/sethvargo/go-envconfig v1.1.1
