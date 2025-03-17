@@ -1,8 +1,6 @@
 module github.com/nais/bifrost
 
 go 1.21
-toolchain go1.23.6
-
 require (
 	github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang v0.0.0-20230613000214-83d1aa25594e
 	github.com/gin-contrib/multitemplate v1.0.1
@@ -16,9 +14,9 @@ require (
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/api v0.214.0
 	gopkg.in/yaml.v2 v2.4.0
-	k8s.io/api v0.29.14
-	k8s.io/apimachinery v0.29.14
-	k8s.io/client-go v0.29.14
+	k8s.io/api v0.29.15
+	k8s.io/apimachinery v0.29.15
+	k8s.io/client-go v0.29.15
 	sigs.k8s.io/controller-runtime v0.17.6
 )
 
