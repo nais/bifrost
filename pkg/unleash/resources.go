@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"strings"
 
-	fqdnV1alpha3 "github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/api/v1alpha3"
 	"github.com/go-playground/validator/v10"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/github"
 	"github.com/nais/bifrost/pkg/utils"
+	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"

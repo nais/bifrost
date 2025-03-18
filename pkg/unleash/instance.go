@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	fqdnV1alpha3 "github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/api/v1alpha3"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/utils"
+	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	admin "google.golang.org/api/sqladmin/v1beta4"
 	corev1 "k8s.io/api/core/v1"
