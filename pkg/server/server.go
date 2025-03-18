@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
-	fqdnV1alpha3 "github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/api/v1alpha3"
 	"github.com/gin-gonic/gin"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/handler"
 	"github.com/nais/bifrost/pkg/server/utils"
 	"github.com/nais/bifrost/pkg/unleash"
+	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	admin "google.golang.org/api/sqladmin/v1beta4"

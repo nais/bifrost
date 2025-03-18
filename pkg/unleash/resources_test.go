@@ -4,10 +4,10 @@ import (
 	"strconv"
 	"testing"
 
-	fqdnV1alpha3 "github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/api/v1alpha3"
 	"github.com/google/go-cmp/cmp"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/github"
+	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
