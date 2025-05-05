@@ -11,7 +11,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/nais/fqdn-policy v0.0.0-20250317094855-3546e91f0c79
 	github.com/nais/unleasherator v0.0.0-20240204195504-ef964277c0b3
-	github.com/sethvargo/go-envconfig v1.2.0
+	github.com/sethvargo/go-envconfig v1.3.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
