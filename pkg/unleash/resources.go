@@ -45,7 +45,7 @@ func int64Ref(i int64) *int64 {
 	return &intvar
 }
 
-func FQDNNetworkPolicyDefinition(name string, kubeNamespace string) fqdnV1alpha3.FQDNNetworkPolicy {
+func FQDNNetworkPolicyDefinition(name, kubeNamespace, teamsAPIHost string) fqdnV1alpha3.FQDNNetworkPolicy {
 	protocolTCP := corev1.ProtocolTCP
 
 	return fqdnV1alpha3.FQDNNetworkPolicy{
@@ -76,7 +76,13 @@ func FQDNNetworkPolicyDefinition(name string, kubeNamespace string) fqdnV1alpha3
 					},
 					To: []fqdnV1alpha3.FQDNNetworkPolicyPeer{
 						{
-							FQDNs: []string{"sqladmin.googleapis.com", "www.gstatic.com", "hooks.slack.com", "console.nav.cloud.nais.io"},
+							FQDNs: []string{
+								"sqladmin.googleapis.com",
+								"www.gstatic.com",
+								"hooks.slack.com",
+								"auth.nais.io",
+								teamsAPIHost,
+							},
 						},
 					},
 				},
