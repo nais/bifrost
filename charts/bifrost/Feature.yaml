@@ -30,6 +30,9 @@ values:
     displayName: Teams API key for Bifrost backend
     computed:
       template: '"{{ .Management.bifrost_teams_api_key }}"'
+  backend.teams.apiUrl:
+    computed:
+      template: '"https://{{ subdomain . "console" }}/graphql"'
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class
     computed:
@@ -66,6 +69,9 @@ values:
     displayName: Teams API key for Unleash instances
     computed:
       template: '"{{ .Management.unleash_teams_api_key }}"'
+  backend.unleash.teamsApiUrl:
+    computed:
+      template: '"https://{{ subdomain . "console" }}/graphql"'
   backend.unleash.webIngressClass:
     displayName: Web Ingress Class
     computed:
