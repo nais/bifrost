@@ -75,7 +75,7 @@ values:
   backend.unleash.webIngressClass:
     displayName: Web Ingress Class
     computed:
-      template: '"nais-ingress-iap"'
+      template: '"nais-ingress-fa"'
   backend.unleash.webIngressHost:
     displayName: Web Ingress Host
     computed:
