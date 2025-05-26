@@ -32,6 +32,9 @@ backend:
     # apiIngressClass:  # mapped in fasit
     # apiIngressHost:  # mapped in fasit
 
+    # Unleash web oauth config
+    # webOAuthJWTAudience: # mapped in fasit
+
     # Unleash teams config
     teamsApiUrl: https://console.nav.cloud.nais.io/graphql
     # teamsApiToken:  # mapped in fasit
@@ -40,9 +43,7 @@ backend:
 
   google: {}
     # projectId:  # mapped in fasit
-    # projectNumber:  # mapped in fasit
     # serviceAccountEmail:  # mapped in fasit
-    # iapBackendServiceId:  # mapped in fasit
 
   teams:
     apiUrl: https://console.nav.cloud.nais.io/graphql

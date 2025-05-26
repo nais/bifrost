@@ -58,9 +58,7 @@ type ServerConfig struct {
 }
 
 type GoogleConfig struct {
-	ProjectID           string `env:"BIFROST_GOOGLE_PROJECT_ID,required"`
-	ProjectNumber       string `env:"BIFROST_GOOGLE_PROJECT_NUMBER,required"`
-	IAPBackendServiceID string `env:"BIFROST_GOOGLE_IAP_BACKEND_SERVICE_ID,required"`
+	ProjectID string `env:"BIFROST_GOOGLE_PROJECT_ID,required"`
 }
 
 type TeamsConfig struct {
@@ -69,18 +67,19 @@ type TeamsConfig struct {
 }
 
 type UnleashConfig struct {
-	InstanceNamespace       string `env:"BIFROST_UNLEASH_INSTANCE_NAMESPACE,required"`
-	InstanceServiceaccount  string `env:"BIFROST_UNLEASH_INSTANCE_SERVICEACCOUNT,required"`
-	SQLInstanceID           string `env:"BIFROST_UNLEASH_SQL_INSTANCE_ID,required"`
-	SQLInstanceRegion       string `env:"BIFROST_UNLEASH_SQL_INSTANCE_REGION,required"`
-	SQLInstanceAddress      string `env:"BIFROST_UNLEASH_SQL_INSTANCE_ADDRESS,required"`
-	InstanceWebIngressHost  string `env:"BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_HOST,required"`
-	InstanceWebIngressClass string `env:"BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_CLASS,required"`
-	InstanceAPIIngressHost  string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST,required"`
-	InstanceAPIIngressClass string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS,required"`
-	TeamsApiURL             string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL,required"`
-	TeamsApiSecretName      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
-	TeamsApiSecretTokenKey  string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
+	InstanceNamespace           string `env:"BIFROST_UNLEASH_INSTANCE_NAMESPACE,required"`
+	InstanceServiceaccount      string `env:"BIFROST_UNLEASH_INSTANCE_SERVICEACCOUNT,required"`
+	SQLInstanceID               string `env:"BIFROST_UNLEASH_SQL_INSTANCE_ID,required"`
+	SQLInstanceRegion           string `env:"BIFROST_UNLEASH_SQL_INSTANCE_REGION,required"`
+	SQLInstanceAddress          string `env:"BIFROST_UNLEASH_SQL_INSTANCE_ADDRESS,required"`
+	InstanceWebIngressHost      string `env:"BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_HOST,required"`
+	InstanceWebIngressClass     string `env:"BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_CLASS,required"`
+	InstanceWebOAuthJWTAudience string `env:"BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE,required"`
+	InstanceAPIIngressHost      string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST,required"`
+	InstanceAPIIngressClass     string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS,required"`
+	TeamsApiURL                 string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL,required"`
+	TeamsApiSecretName          string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
+	TeamsApiSecretTokenKey      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
 }
 
 type Config struct {
@@ -99,10 +98,6 @@ func (c *Config) GoogleProjectURL(path string) string {
 	}
 
 	return fmt.Sprintf("https://console.cloud.google.com/%s?project=%s", path, c.Google.ProjectID)
-}
-
-func (c *Config) GoogleIAPAudience() string {
-	return fmt.Sprintf("/projects/%s/global/backendServices/%s", c.Google.ProjectNumber, c.Google.IAPBackendServiceID)
 }
 
 func (c *Config) GetServerAddr() string {

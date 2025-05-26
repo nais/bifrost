@@ -126,10 +126,11 @@ func TestUnleashVariables(t *testing.T) {
 func TestFQDNNetworkPolicySpec(t *testing.T) {
 	teamName := "my-instance"
 	kubeNamespace := "my-instancespace"
+	teamsAPIHost := "teams.example"
 
 	protocolTCP := corev1.ProtocolTCP
 
-	a := FQDNNetworkPolicyDefinition(teamName, kubeNamespace)
+	a := FQDNNetworkPolicyDefinition(teamName, kubeNamespace, teamsAPIHost)
 	b := fqdnV1alpha3.FQDNNetworkPolicy{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "FQDNNetworkPolicy",
@@ -158,7 +159,13 @@ func TestFQDNNetworkPolicySpec(t *testing.T) {
 					},
 					To: []fqdnV1alpha3.FQDNNetworkPolicyPeer{
 						{
-							FQDNs: []string{"sqladmin.googleapis.com", "www.gstatic.com", "hooks.slack.com", "console.nav.cloud.nais.io"},
+							FQDNs: []string{
+								"sqladmin.googleapis.com",
+								"www.gstatic.com",
+								"hooks.slack.com",
+								"auth.nais.io",
+								"teams.example",
+							},
 						},
 					},
 				},
@@ -191,23 +198,22 @@ func TestFQDNNetworkPolicySpec(t *testing.T) {
 func TestUnleashSpec(t *testing.T) {
 	c := config.Config{
 		Google: config.GoogleConfig{
-			ProjectID:           "my-project",
-			ProjectNumber:       "1234",
-			IAPBackendServiceID: "5678",
+			ProjectID: "my-project",
 		},
 		Unleash: config.UnleashConfig{
-			InstanceNamespace:       "unleash-ns",
-			InstanceServiceaccount:  "unleash-sa",
-			SQLInstanceID:           "my-instance",
-			SQLInstanceRegion:       "my-region",
-			SQLInstanceAddress:      "1.2.3.4",
-			InstanceWebIngressHost:  "unleash-web.example.com",
-			InstanceWebIngressClass: "unleash-web-ingress-class",
-			InstanceAPIIngressHost:  "unleash-api.example.com",
-			InstanceAPIIngressClass: "unleash-api-ingress-class",
-			TeamsApiURL:             "https://teams.example.com/query",
-			TeamsApiSecretName:      "my-instances-api-secret",
-			TeamsApiSecretTokenKey:  "token",
+			InstanceNamespace:           "unleash-ns",
+			InstanceServiceaccount:      "unleash-sa",
+			SQLInstanceID:               "my-instance",
+			SQLInstanceRegion:           "my-region",
+			SQLInstanceAddress:          "1.2.3.4",
+			InstanceWebIngressHost:      "unleash-web.example.com",
+			InstanceWebIngressClass:     "unleash-web-ingress-class",
+			InstanceAPIIngressHost:      "unleash-api.example.com",
+			InstanceAPIIngressClass:     "unleash-api-ingress-class",
+			InstanceWebOAuthJWTAudience: "some-audience",
+			TeamsApiURL:                 "https://teams.example.com/query",
+			TeamsApiSecretName:          "my-instances-api-secret",
+			TeamsApiSecretTokenKey:      "token",
 		},
 		CloudConnectorProxy: "repo/connector:latest",
 	}
@@ -270,35 +276,40 @@ func TestUnleashSpec(t *testing.T) {
 					Namespaces:  []string{},
 					SecretNonce: "my-nonce",
 				},
-				ExtraEnvVars: []corev1.EnvVar{{
-					Name:  "GOOGLE_IAP_AUDIENCE",
-					Value: "/projects/1234/global/backendServices/5678",
-				}, {
-					Name:  "TEAMS_API_URL",
-					Value: "https://teams.example.com/query",
-				}, {
-					Name: "TEAMS_API_TOKEN",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "my-instances-api-secret",
+				ExtraEnvVars: []corev1.EnvVar{
+					{
+						Name:  "OAUTH_JWT_AUDIENCE",
+						Value: "some-audience",
+					}, {
+						Name:  "OAUTH_JWT_AUTH",
+						Value: "true",
+					}, {
+						Name:  "TEAMS_API_URL",
+						Value: "https://teams.example.com/query",
+					}, {
+						Name: "TEAMS_API_TOKEN",
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "my-instances-api-secret",
+								},
+								Key: "token",
 							},
-							Key: "token",
 						},
+					}, {
+						Name:  "TEAMS_ALLOWED_TEAMS",
+						Value: "",
+					}, {
+						Name:  "LOG_LEVEL",
+						Value: "",
+					}, {
+						Name:  "DATABASE_POOL_MAX",
+						Value: "0",
+					}, {
+						Name:  "DATABASE_POOL_IDLE_TIMEOUT_MS",
+						Value: "0",
 					},
-				}, {
-					Name:  "TEAMS_ALLOWED_TEAMS",
-					Value: "",
-				}, {
-					Name:  "LOG_LEVEL",
-					Value: "",
-				}, {
-					Name:  "DATABASE_POOL_MAX",
-					Value: "0",
-				}, {
-					Name:  "DATABASE_POOL_IDLE_TIMEOUT_MS",
-					Value: "0",
-				}},
+				},
 				ExtraContainers: []corev1.Container{{
 					Name:  "sql-proxy",
 					Image: "repo/connector:latest",

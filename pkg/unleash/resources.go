@@ -45,7 +45,7 @@ func int64Ref(i int64) *int64 {
 	return &intvar
 }
 
-func FQDNNetworkPolicyDefinition(name string, kubeNamespace string) fqdnV1alpha3.FQDNNetworkPolicy {
+func FQDNNetworkPolicyDefinition(name, kubeNamespace, teamsAPIHost string) fqdnV1alpha3.FQDNNetworkPolicy {
 	protocolTCP := corev1.ProtocolTCP
 
 	return fqdnV1alpha3.FQDNNetworkPolicy{
@@ -76,7 +76,13 @@ func FQDNNetworkPolicyDefinition(name string, kubeNamespace string) fqdnV1alpha3
 					},
 					To: []fqdnV1alpha3.FQDNNetworkPolicyPeer{
 						{
-							FQDNs: []string{"sqladmin.googleapis.com", "www.gstatic.com", "hooks.slack.com", "console.nav.cloud.nais.io"},
+							FQDNs: []string{
+								"sqladmin.googleapis.com",
+								"www.gstatic.com",
+								"hooks.slack.com",
+								"auth.nais.io",
+								teamsAPIHost,
+							},
 						},
 					},
 				},
@@ -207,8 +213,6 @@ func UnleashDefinition(c *config.Config, uc *UnleashConfig) unleashv1.Unleash {
 	cloudSqlProto := corev1.ProtocolTCP
 	cloudSqlPort := intstr.FromInt(3307)
 
-	googleIapAudience := c.GoogleIAPAudience()
-
 	federationNonce := uc.FederationNonce
 	if federationNonce == "" {
 		federationNonce = utils.RandomString(8)
@@ -270,35 +274,47 @@ func UnleashDefinition(c *config.Config, uc *UnleashConfig) unleashv1.Unleash {
 				Clusters:    utils.SplitNoEmpty(uc.AllowedClusters, ","),
 				SecretNonce: federationNonce,
 			},
-			ExtraEnvVars: []corev1.EnvVar{{
-				Name:  "GOOGLE_IAP_AUDIENCE",
-				Value: googleIapAudience,
-			}, {
-				Name:  "TEAMS_API_URL",
-				Value: c.Unleash.TeamsApiURL,
-			}, {
-				Name: "TEAMS_API_TOKEN",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: c.Unleash.TeamsApiSecretName,
+			ExtraEnvVars: []corev1.EnvVar{
+				{
+					Name:  "OAUTH_JWT_AUDIENCE",
+					Value: c.Unleash.InstanceWebOAuthJWTAudience,
+				},
+				{
+					Name:  "OAUTH_JWT_AUTH",
+					Value: "true",
+				},
+				{
+					Name:  "TEAMS_API_URL",
+					Value: c.Unleash.TeamsApiURL,
+				},
+				{
+					Name: "TEAMS_API_TOKEN",
+					ValueFrom: &corev1.EnvVarSource{
+						SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: c.Unleash.TeamsApiSecretName,
+							},
+							Key: c.Unleash.TeamsApiSecretTokenKey,
 						},
-						Key: c.Unleash.TeamsApiSecretTokenKey,
 					},
 				},
-			}, {
-				Name:  "TEAMS_ALLOWED_TEAMS",
-				Value: uc.AllowedTeams,
-			}, {
-				Name:  "LOG_LEVEL",
-				Value: uc.LogLevel,
-			}, {
-				Name:  "DATABASE_POOL_MAX",
-				Value: fmt.Sprintf("%d", uc.DatabasePoolMax),
-			}, {
-				Name:  "DATABASE_POOL_IDLE_TIMEOUT_MS",
-				Value: fmt.Sprintf("%d", uc.DatabasePoolIdleTimeoutMs),
-			}},
+				{
+					Name:  "TEAMS_ALLOWED_TEAMS",
+					Value: uc.AllowedTeams,
+				},
+				{
+					Name:  "LOG_LEVEL",
+					Value: uc.LogLevel,
+				},
+				{
+					Name:  "DATABASE_POOL_MAX",
+					Value: fmt.Sprintf("%d", uc.DatabasePoolMax),
+				},
+				{
+					Name:  "DATABASE_POOL_IDLE_TIMEOUT_MS",
+					Value: fmt.Sprintf("%d", uc.DatabasePoolIdleTimeoutMs),
+				},
+			},
 			ExtraContainers: []corev1.Container{{
 				Name:  "sql-proxy",
 				Image: c.CloudConnectorProxy,

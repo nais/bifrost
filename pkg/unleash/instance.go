@@ -3,6 +3,7 @@ package unleash
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/utils"
@@ -177,21 +178,30 @@ func deleteFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNa
 	return nil
 }
 
-func createFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNamespace string, name string) error {
-	fqdn := FQDNNetworkPolicyDefinition(name, kubeNamespace)
+func createFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNamespace, name, teamsAPIURL string) error {
+	u, err := url.Parse(teamsAPIURL)
+	if err != nil {
+		return &UnleashError{Err: fmt.Errorf("parsing %q: %w", teamsAPIURL, err), Reason: "failed to parse teams API URL"}
+	}
+	fqdn := FQDNNetworkPolicyDefinition(name, kubeNamespace, u.Host)
 	if err := kubeClient.Create(ctx, &fqdn); err != nil {
 		return &UnleashError{Err: err, Reason: "failed to create fqdn network policy"}
 	}
 	return nil
 }
 
-func updateFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNamespace string, name string) error {
+func updateFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNamespace, name, teamsAPIURL string) error {
 	fqdnOld, err := getFQDNNetworkPolicy(ctx, kubeClient, kubeNamespace, name)
 	if err != nil {
 		return err
 	}
 
-	fqdnNew := FQDNNetworkPolicyDefinition(name, kubeNamespace)
+	u, err := url.Parse(teamsAPIURL)
+	if err != nil {
+		return &UnleashError{Err: fmt.Errorf("parsing %q: %w", teamsAPIURL, err), Reason: "failed to parse teams API URL"}
+	}
+
+	fqdnNew := FQDNNetworkPolicyDefinition(name, kubeNamespace, u.Host)
 	fqdnNew.ObjectMeta.ResourceVersion = fqdnOld.ObjectMeta.ResourceVersion
 	fqdnNew.ObjectMeta.CreationTimestamp = fqdnOld.ObjectMeta.CreationTimestamp
 	fqdnNew.ObjectMeta.Generation = fqdnOld.ObjectMeta.Generation
