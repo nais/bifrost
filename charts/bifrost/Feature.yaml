@@ -80,6 +80,10 @@ values:
     displayName: Web Ingress Host
     computed:
       template: '"{{ subdomain . "unleash-web.iap" }}"'
+  backend.unleash.webOAuthJWTAudience:
+    displayName: Unleash web OAuth JWT audience
+    computed:
+      template: '"{{ .Env.wonderwall_forward_auth_zitadel_client_id }}"'
   ingress.host:
     displayName: Ingress URL
     computed:

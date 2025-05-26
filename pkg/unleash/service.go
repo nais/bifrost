@@ -108,7 +108,7 @@ func (s *UnleashService) Create(ctx context.Context, uc *UnleashConfig) (*unleas
 }
 
 func (s *UnleashService) Update(ctx context.Context, uc *UnleashConfig) (*unleashv1.Unleash, error) {
-	fqdnError := updateFQDNNetworkPolicy(ctx, s.kubeClient, s.config.Unleash.InstanceNamespace, uc.Name)
+	fqdnError := updateFQDNNetworkPolicy(ctx, s.kubeClient, s.config.Unleash.InstanceNamespace, uc.Name, s.config.Unleash.TeamsApiURL)
 	unleashInstance, serverError := updateServer(ctx, s.kubeClient, s.config, uc)
 
 	if err := errors.Join(fqdnError, serverError); err != nil {

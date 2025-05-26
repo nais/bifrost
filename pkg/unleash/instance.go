@@ -190,13 +190,18 @@ func createFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNa
 	return nil
 }
 
-func updateFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNamespace string, name string) error {
+func updateFQDNNetworkPolicy(ctx context.Context, kubeClient ctrl.Client, kubeNamespace, name, teamsAPIURL string) error {
 	fqdnOld, err := getFQDNNetworkPolicy(ctx, kubeClient, kubeNamespace, name)
 	if err != nil {
 		return err
 	}
 
-	fqdnNew := FQDNNetworkPolicyDefinition(name, kubeNamespace)
+	u, err := url.Parse(teamsAPIURL)
+	if err != nil {
+		return &UnleashError{Err: fmt.Errorf("parsing %q: %w", teamsAPIURL, err), Reason: "failed to parse teams API URL"}
+	}
+
+	fqdnNew := FQDNNetworkPolicyDefinition(name, kubeNamespace, u.Host)
 	fqdnNew.ObjectMeta.ResourceVersion = fqdnOld.ObjectMeta.ResourceVersion
 	fqdnNew.ObjectMeta.CreationTimestamp = fqdnOld.ObjectMeta.CreationTimestamp
 	fqdnNew.ObjectMeta.Generation = fqdnOld.ObjectMeta.Generation

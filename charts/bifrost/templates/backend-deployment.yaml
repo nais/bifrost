@@ -52,10 +52,6 @@ spec:
             # Google
             - name: BIFROST_GOOGLE_PROJECT_ID
               value: {{ .Values.backend.google.projectId | quote }}
-            - name: BIFROST_GOOGLE_PROJECT_NUMBER
-              value: {{ .Values.backend.google.projectNumber | quote }}
-            - name: BIFROST_GOOGLE_IAP_BACKEND_SERVICE_ID
-              value: {{ .Values.backend.google.iapBackendServiceId | quote }}
             # Teams
             - name: BIFROST_TEAMS_API_URL
               value: {{ .Values.backend.teams.apiUrl | quote }}
@@ -83,6 +79,8 @@ spec:
               value: {{ .Values.backend.unleash.apiIngressClass | required ".unleash.apiIngressClass is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST
               value: {{ .Values.backend.unleash.apiIngressHost | required ".unleash.apiIngressHost is required" | quote }}
+            - name: BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE
+              value: {{ .Values.backend.unleash.webOAuthJWTAudience | required ".unleash.webOAuthJWTAudience is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL
               value: {{ .Values.backend.unleash.teamsApiUrl | required ".unleash.teamsApiUrl is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME
