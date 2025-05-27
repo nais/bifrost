@@ -7,18 +7,10 @@ environmentKinds:
   - management
 
 values:
-  backend.google.iapBackendServiceId:
-    description: ID for Backend Service for IAP loadbanacer used for verifying JWT tokens from IAP.
-    computed:
-      template: "{{.Env.iap_backend_id | quote}}"
   backend.google.projectId:
     displayName: google project id
     computed:
       template: '"{{.Management.project_id}}"'
-  backend.google.projectNumber:
-    displayName: google project number
-    computed:
-      template: '"{{.Management.bifrost_google_project_number }}"'
   backend.google.serviceAccountEmail:
     displayName: google service account Email
     computed:
@@ -84,10 +76,6 @@ values:
     displayName: Unleash web OAuth JWT audience
     computed:
       template: '"{{ .Env.wonderwall_forward_auth_zitadel_client_id }}"'
-  ingress.host:
-    displayName: Ingress URL
-    computed:
-      template: '"{{ subdomain . "bifrost" }}"'
   networkPolicy.allowDNS:
     computed:
       template: "true"
