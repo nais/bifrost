@@ -6,7 +6,7 @@ toolchain go1.24.1
 
 require (
 	github.com/gin-contrib/multitemplate v1.1.1
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 	github.com/google/go-cmp v0.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/nais/fqdn-policy v0.0.0-20250317094855-3546e91f0c79
