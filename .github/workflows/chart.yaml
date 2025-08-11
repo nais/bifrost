@@ -66,7 +66,7 @@ jobs:
           fetch-depth: 0
 
       - name: Restore Chart Metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: chart-metadata
           path: ./charts/${{ needs.meta.outputs.name }}
@@ -119,7 +119,7 @@ jobs:
           fetch-depth: 0
 
       - name: Restore Chart Metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: chart-metadata
           path: ./charts/${{ needs.meta.outputs.name }}
