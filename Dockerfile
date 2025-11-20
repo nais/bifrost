@@ -1,5 +1,5 @@
 # Build the bifrost binary
-FROM golang:1.24.6 AS builder
+FROM golang:1.25.4 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
