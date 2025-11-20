@@ -14,6 +14,10 @@ RUN go mod download
 # Copy the go source
 COPY . .
 
+# Generate Swagger documentation
+RUN go install github.com/swaggo/swag/cmd/swag@latest
+RUN swag init --parseDependency --parseInternal
+
 # Build
 # the GOARCH has not a default value to allow the binary be built according to the host where the command
 # was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
@@ -26,8 +30,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o bi
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/bifrost .
-COPY --from=builder /workspace/templates ./templates
-COPY --from=builder /workspace/assets ./assets
+COPY --from=builder /workspace/docs ./docs
 USER 65532:65532
 
 ENTRYPOINT ["/bifrost"]

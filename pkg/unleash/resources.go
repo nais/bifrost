@@ -130,16 +130,16 @@ func getServerEnvVar(server *unleashv1.Unleash, name, defaultValue string, retur
 }
 
 type UnleashConfig struct {
-	Name                      string `json:"name,omitempty" form:"name" validate:"required,hostname"`
-	CustomVersion             string `json:"custom-version,omitempty" form:"custom-version" validate:"omitempty"`
-	EnableFederation          bool   `json:"enable-federation,omitempty" form:"enable-federation,default=true"`
-	FederationNonce           string `json:"-" form:"-" validate:"required"`
-	AllowedTeams              string `json:"allowed-teams,omitempty" form:"allowed-teams" validate:"omitempty"`
-	AllowedNamespaces         string `json:"allowed-namespaces,omitempty" form:"allowed-namespaces" validate:"omitempty"`
-	AllowedClusters           string `json:"allowed-clusters,omitempty" form:"allowed-clusters" validate:"omitempty"`
-	LogLevel                  string `json:"log-level,omitempty" form:"loglevel,default=warn" validate:"required,oneof=debug info warn error fatal panic"`
-	DatabasePoolMax           int    `json:"database-pool-max,omitempty" form:"database-pool-max,default=3" validate:"required,min=1,max=10"`
-	DatabasePoolIdleTimeoutMs int    `json:"database-pool-idle-timeout-ms,omitempty" form:"database-pool-idle-timeout-ms,default=1000" validate:"required"`
+	Name                      string `json:"name,omitempty" validate:"required,hostname"`
+	CustomVersion             string `json:"custom-version,omitempty" validate:"omitempty"`
+	EnableFederation          bool   `json:"enable-federation,omitempty"`
+	FederationNonce           string `json:"-" validate:"required"`
+	AllowedTeams              string `json:"allowed-teams,omitempty" validate:"omitempty"`
+	AllowedNamespaces         string `json:"allowed-namespaces,omitempty" validate:"omitempty"`
+	AllowedClusters           string `json:"allowed-clusters,omitempty" validate:"omitempty"`
+	LogLevel                  string `json:"log-level,omitempty" validate:"required,oneof=debug info warn error fatal panic"`
+	DatabasePoolMax           int    `json:"database-pool-max,omitempty" validate:"required,min=1,max=10"`
+	DatabasePoolIdleTimeoutMs int    `json:"database-pool-idle-timeout-ms,omitempty" validate:"required"`
 }
 
 func (uc *UnleashConfig) SetDefaultValues(unleashVersions []github.UnleashVersion) {

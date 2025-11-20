@@ -8,17 +8,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/handler"
-	"github.com/nais/bifrost/pkg/server/utils"
 	"github.com/nais/bifrost/pkg/unleash"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	admin "google.golang.org/api/sqladmin/v1beta4"
 	"k8s.io/apimachinery/pkg/runtime"
 	client_go_scheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+
+	_ "github.com/nais/bifrost/docs" // Import generated docs
 )
 
 func initGoogleClients(ctx context.Context) (*admin.InstancesService, *admin.DatabasesService, *admin.UsersService, error) {
@@ -85,30 +88,22 @@ func setupRouter(config *config.Config, logger *logrus.Logger, unleashService un
 
 	h := handler.NewHandler(config, logger, unleashService)
 
-	router.Use(h.ErrorHandler)
-	router.Static("/assets", "./assets")
+	// Swagger UI
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	router.HTMLRender = utils.LoadTemplates(config)
-	router.GET("/", func(c *gin.Context) {
-		c.Redirect(302, "/unleash")
-	})
-
+	// Health check
 	router.GET("/healthz", h.HealthHandler)
 
+	// Unleash API routes
 	unleash := router.Group("/unleash")
 	{
-		unleash.GET("/", h.UnleashIndex)
-		unleash.GET("/new", h.UnleashNew)
 		unleash.POST("/new", h.UnleashInstancePost)
 
 		unleashInstance := unleash.Group("/:id")
 		unleashInstance.Use(h.UnleashInstanceMiddleware)
 		{
-			unleashInstance.GET("/", h.UnleashInstanceShow)
-			unleashInstance.GET("/edit", h.UnleashInstanceEdit)
 			unleashInstance.POST("/edit", h.UnleashInstancePost)
-			unleashInstance.GET("/delete", h.UnleashInstanceDelete)
-			unleashInstance.POST("/delete", h.UnleashInstanceDeletePost)
+			unleashInstance.DELETE("", h.UnleashInstanceDelete)
 		}
 	}
 
