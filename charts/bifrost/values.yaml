@@ -57,10 +57,6 @@ service:
   type: ClusterIP
   port: 80
 
-ingress:
-  className: nais-ingress-iap
-  # host:  # mapped in fasit
-
 networkPolicy:
   enabled: true
   allowDNS: true
