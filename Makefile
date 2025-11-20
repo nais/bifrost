@@ -10,8 +10,12 @@ LDFLAGS := -X github.com/nais/bifrost/pkg/version.Revision=$(LAST_COMMIT) -X git
 all: fmt lint vet check test build
 
 .PHONY: build
-build:
+build: swagger-generate
 	go build -o bin/bifrost -ldflags "-s $(LDFLAGS)" .
+
+.PHONY: swagger-generate
+swagger-generate: swag
+	$(SWAG) init --parseDependency --parseInternal
 
 .PHONY: test
 test:
@@ -52,6 +56,7 @@ GOVULNCHECK ?= $(LOCALBIN)/govulncheck
 STATICCHECK ?= $(LOCALBIN)/staticcheck
 GOFUMPT ?= $(LOCALBIN)/gofumpt
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+SWAG ?= $(LOCALBIN)/swag
 
 .PHONY: govulncheck
 govulncheck: $(GOVULNCHECK) ## Download govulncheck locally if necessary.
@@ -72,3 +77,8 @@ $(GOFUMPT): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	test -s $(LOCALBIN)/golangci-lint || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint
+
+.PHONY: swag
+swag: $(SWAG) ## Download swag locally if necessary.
+$(SWAG): $(LOCALBIN)
+	test -s $(LOCALBIN)/swag || GOBIN=$(LOCALBIN) go install github.com/swaggo/swag/cmd/swag@latest

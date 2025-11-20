@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,6 @@ import (
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -75,24 +73,6 @@ func (s *MockUnleashService) Delete(ctx context.Context, name string) error {
 	return fmt.Errorf("instance not found")
 }
 
-func unleashConfigToForm(uc *unleash.UnleashConfig) string {
-	enableFederation := ""
-	if uc.EnableFederation {
-		enableFederation = "true"
-	}
-	return fmt.Sprintf("name=%s&custom-version=%s&enable-federation=%s&allowed-teams=%s&allowed-namespaces=%s&allowed-clusters=%s&loglevel=%s&database-pool-max=%d&database-pool-idle-timeout-ms=%d",
-		uc.Name,
-		uc.CustomVersion,
-		enableFederation,
-		uc.AllowedTeams,
-		uc.AllowedNamespaces,
-		uc.AllowedClusters,
-		uc.LogLevel,
-		uc.DatabasePoolMax,
-		uc.DatabasePoolIdleTimeoutMs,
-	)
-}
-
 func TestHealthzRoute(t *testing.T) {
 	config := &config.Config{}
 	logger := logrus.New()
@@ -107,28 +87,8 @@ func TestHealthzRoute(t *testing.T) {
 	assert.Equal(t, "OK", w.Body.String())
 }
 
-func TestMetricsRoute(t *testing.T) {
-	t.Skip()
-
-	config := &config.Config{}
-	logger := logrus.New()
-	service := &MockUnleashService{c: config}
-
-	router := setupRouter(config, logger, service)
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/metrics", nil)
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "go_gc_duration_seconds")
-}
-
 func newUnleashRoute() (c *config.Config, service *MockUnleashService, router *gin.Engine) {
-	c = &config.Config{
-		Server: config.ServerConfig{
-			TemplatesDir: "../../templates",
-		},
-	}
+	c = &config.Config{}
 
 	unleash1 := unleash.UnleashDefinition(c, &unleash.UnleashConfig{
 		Name:                      "team-a",
@@ -183,206 +143,156 @@ func newUnleashRoute() (c *config.Config, service *MockUnleashService, router *g
 	return
 }
 
-func TestUnleashIndex(t *testing.T) {
-	_, _, router := newUnleashRoute()
+// JSON API Tests - establishing baseline contract for API-only refactoring
 
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/unleash", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 301, w.Code)
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/unleash/", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "<a class=\"header\" href=\"team-a\">team-a</a>")
-	assert.Contains(t, w.Body.String(), "<div class=\"description\">Version 1.2.3</div>")
-	assert.Contains(t, w.Body.String(), "<a class=\"header\" href=\"team-b\">team-b</a>")
-	assert.Contains(t, w.Body.String(), "<div class=\"description\">Version 4.5.6</div>")
-}
-
-func TestUnleashNew(t *testing.T) {
+func TestJSONAPI_CreateUnleashInstance_Success(t *testing.T) {
 	_, service, router := newUnleashRoute()
 
+	payload := `{
+		"name": "test-instance",
+		"custom-version": "v5.10.2-20240329-070801-0180a96",
+		"enable-federation": true,
+		"allowed-teams": "team-x,team-y",
+		"allowed-namespaces": "ns-x,ns-y",
+		"allowed-clusters": "dev-gcp,prod-gcp",
+		"log-level": "info",
+		"database-pool-max": 5,
+		"database-pool-idle-timeout-ms": 2000
+	}`
+
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/unleash/new", nil)
+	req, _ := http.NewRequest("POST", "/unleash/new", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
+
 	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "<h1 class=\"ui header\">New Unleash Instance</h1>")
-	assert.Contains(t, w.Body.String(), "<form class=\"ui form\" method=\"POST\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"name\" type=\"text\" value=\"\">")
-	// assert.Contains(t, w.Body.String(), "<input name=\"custom-version\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"enable-federation\" type=\"checkbox\" value=\"true\" checked>")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-teams\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-namespaces\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-clusters\" type=\"hidden\" value=\"dev-gcp,prod-gcp\">")
-	assert.Contains(t, w.Body.String(), "<input type=\"radio\" name=\"loglevel\" value=\"warn\" checked=\"checked\" tabindex=\"0\" class=\"hidden\">")
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/new", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 500, w.Code)
-	// assert.Contains(t, w.Body.String(), "<form class=\"ui form error\" method=\"POST\">")
-	// assert.Contains(t, w.Body.String(), "<div class=\"name field error\">")
-	// assert.Contains(t, w.Body.String(), "<p>Input validation failed, see errors in above fields</p>")
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/new", strings.NewReader("name=my-name"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 302, w.Code)
-	assert.Equal(t, "/unleash/my-name", w.Header().Get("Location"))
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), `"name":"test-instance"`)
+	assert.Contains(t, w.Body.String(), `"kind":"Unleash"`)
 	assert.Equal(t, 3, len(service.Instances))
-	assert.Equal(t, "my-name", service.Instances[2].Name)
-	assert.Equal(t, []string{}, service.Instances[2].ServerInstance.Spec.Federation.Clusters)
-	assert.Equal(t, []string{}, service.Instances[2].ServerInstance.Spec.Federation.Namespaces)
-	assert.Contains(t, service.Instances[2].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "TEAMS_ALLOWED_TEAMS", Value: ""})
-	assert.Contains(t, service.Instances[2].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "LOG_LEVEL", Value: "warn"})
-	assert.Contains(t, service.Instances[2].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "DATABASE_POOL_MAX", Value: "3"})
-	assert.Contains(t, service.Instances[2].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "DATABASE_POOL_IDLE_TIMEOUT_MS", Value: "1000"})
-
-	w = httptest.NewRecorder()
-	uc := &unleash.UnleashConfig{
-		Name:                      "my-name",
-		CustomVersion:             "v1.2.3-00000000-000000-abcd1234",
-		EnableFederation:          true,
-		AllowedTeams:              "team-a,team-b",
-		AllowedNamespaces:         "ns-a,ns-b",
-		AllowedClusters:           "cluster-a,cluster-b",
-		LogLevel:                  "debug",
-		DatabasePoolMax:           10,
-		DatabasePoolIdleTimeoutMs: 100,
-	}
-
-	req, _ = http.NewRequest("POST", "/unleash/new", strings.NewReader(unleashConfigToForm(uc)))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 302, w.Code)
-	assert.Equal(t, "/unleash/my-name", w.Header().Get("Location"))
-	assert.Equal(t, 4, len(service.Instances))
-	assert.Equal(t, "my-name", service.Instances[3].Name)
-	assert.Equal(t, "europe-north1-docker.pkg.dev/nais-io/nais/images/unleash-v4:v1.2.3-00000000-000000-abcd1234", service.Instances[3].ServerInstance.Spec.CustomImage)
-	assert.Equal(t, true, service.Instances[3].ServerInstance.Spec.Federation.Enabled, true)
-	assert.Equal(t, []string{"cluster-a", "cluster-b"}, service.Instances[3].ServerInstance.Spec.Federation.Clusters)
-	assert.Equal(t, []string{"ns-a", "ns-b", "team-a", "team-b"}, service.Instances[3].ServerInstance.Spec.Federation.Namespaces)
-	assert.Contains(t, service.Instances[3].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "TEAMS_ALLOWED_TEAMS", Value: "ns-a,ns-b,team-a,team-b"})
-	assert.Contains(t, service.Instances[3].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "LOG_LEVEL", Value: "debug"})
-	assert.Contains(t, service.Instances[3].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "DATABASE_POOL_MAX", Value: "10"})
-	assert.Contains(t, service.Instances[3].ServerInstance.Spec.ExtraEnvVars, v1.EnvVar{Name: "DATABASE_POOL_IDLE_TIMEOUT_MS", Value: "100"})
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/new", strings.NewReader(`{"name": "my-name"}`))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
-	assert.Contains(t, w.Body.String(), `{"kind":"Unleash","apiVersion":"unleash.nais.io/v1","metadata":{"name":"my-name"`)
+	assert.Equal(t, "test-instance", service.Instances[2].Name)
 }
 
-func TestUnleashEdit(t *testing.T) {
-	_, _, router := newUnleashRoute()
+func TestJSONAPI_CreateUnleashInstance_ValidationError(t *testing.T) {
+	_, service, router := newUnleashRoute()
+
+	// Missing required name field
+	payload := `{
+		"custom-version": "v5.10.2",
+		"enable-federation": true
+	}`
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/unleash/team-a/edit", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "<h1 class=\"ui header\">Edit Unleash: team-a</h1>")
-	assert.Contains(t, w.Body.String(), "<form class=\"ui form\" method=\"POST\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"name\" type=\"text\" disabled value=\"team-a\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"custom-version\" type=\"hidden\" value=\"v1.2.3-00000000-000000-abcd1234\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"enable-federation\" type=\"checkbox\" value=\"true\" checked>")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-teams\" type=\"hidden\" value=\"team-a,team-b\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-namespaces\" type=\"hidden\" value=\"ns-a,ns-b\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-clusters\" type=\"hidden\" value=\"cluster-a,cluster-b\">")
-	assert.Contains(t, w.Body.String(), "<input type=\"radio\" name=\"loglevel\" value=\"debug\" checked=\"checked\" tabindex=\"0\" class=\"hidden\">")
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/unleash/team-b/edit", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "<h1 class=\"ui header\">Edit Unleash: team-b</h1>")
-	assert.Contains(t, w.Body.String(), "<form class=\"ui form\" method=\"POST\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"name\" type=\"text\" disabled value=\"team-b\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"custom-version\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"enable-federation\" type=\"checkbox\" value=\"true\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-teams\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-namespaces\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input name=\"allowed-clusters\" type=\"hidden\" value=\"\">")
-	assert.Contains(t, w.Body.String(), "<input type=\"radio\" name=\"loglevel\" value=\"warn\" checked=\"checked\" tabindex=\"0\" class=\"hidden\">")
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/team-a/edit", strings.NewReader(`{"name": "foo", "allowed-teams": "team-z"}`))
+	req, _ := http.NewRequest("POST", "/unleash/new", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
-	assert.Contains(t, w.Body.String(), `{"kind":"Unleash","apiVersion":"unleash.nais.io/v1","metadata":{"name":"team-a"`)
-	assert.Contains(t, w.Body.String(), "\"TEAMS_ALLOWED_TEAMS\",\"value\":\"ns-a,ns-b,team-z\"")
 
-	uc := unleash.UnleashConfig{Name: "foo", AllowedTeams: "foo,bar"}
-	ucJson, err := json.Marshal(uc)
-	assert.NoError(t, err)
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/team-a/edit", strings.NewReader(string(ucJson)))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, 400, w.Code)
 	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
-	assert.Contains(t, w.Body.String(), `{"kind":"Unleash","apiVersion":"unleash.nais.io/v1","metadata":{"name":"team-a"`)
-	assert.Contains(t, w.Body.String(), "\"TEAMS_ALLOWED_TEAMS\",\"value\":\"bar,foo,ns-a,ns-b,team-z\"")
+	assert.Contains(t, w.Body.String(), "validation")
+	assert.Equal(t, 2, len(service.Instances)) // Should not create instance
 }
 
-func TestUnleashGet(t *testing.T) {
+func TestJSONAPI_CreateUnleashInstance_InvalidJSON(t *testing.T) {
 	_, _, router := newUnleashRoute()
 
+	payload := `{invalid json`
+
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/unleash/does-not-exist/", nil)
+	req, _ := http.NewRequest("POST", "/unleash/new", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
-	assert.Equal(t, 301, w.Code)
-	assert.Equal(t, "/unleash?status=not-found", w.Header().Get("Location"))
 
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/unleash/team-a", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 301, w.Code)
-	assert.Equal(t, "/unleash/team-a/", w.Header().Get("Location"))
-
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/unleash/team-a/", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "<h1 class=\"ui header\">Unleash: team-a</h1>")
-	assert.Contains(t, w.Body.String(), "<a class=\"ui button\" href=\"./edit\"><i class=\"pencil icon\"></i></a>")
-	assert.Contains(t, w.Body.String(), "<a class=\"ui button\" href=\"./delete\"><i class=\"trash icon\"></i></a>")
-	assert.Contains(t, w.Body.String(), "<span class=\"ui label\">team-a,team-b</span>")
-	assert.Contains(t, w.Body.String(), "<span class=\"ui label\">ns-a,ns-b</span>")
-	assert.Contains(t, w.Body.String(), "<span class=\"ui label\">cluster-a,cluster-b</span>")
-	assert.Contains(t, w.Body.String(), "<i class=\"exclamation triangle icon\"></i> v1.2.3-00000000-000000-abcd1234")
-	assert.Contains(t, w.Body.String(), "<span class=\"ui label\">debug</span>")
+	assert.Equal(t, 400, w.Code) // Invalid JSON returns 400 bad request
+	assert.Contains(t, w.Body.String(), "Invalid request body")
 }
 
-func TestUnleashDelete(t *testing.T) {
+func TestJSONAPI_UpdateUnleashInstance_Success(t *testing.T) {
+	_, service, router := newUnleashRoute()
+
+	payload := `{
+		"custom-version": "v5.11.0-20240401-080000-xyz123",
+		"allowed-teams": "team-z",
+		"log-level": "warn",
+		"database-pool-max": 8
+	}`
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash/team-a/edit", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), `"name":"team-a"`)
+	assert.Contains(t, w.Body.String(), `"kind":"Unleash"`)
+
+	// Verify the instance was updated
+	updated := service.Instances[0]
+	assert.Equal(t, "team-a", updated.Name)
+	assert.Contains(t, updated.ServerInstance.Spec.CustomImage, "v5.11.0-20240401-080000-xyz123")
+}
+
+func TestJSONAPI_UpdateUnleashInstance_NotFound(t *testing.T) {
+	_, _, router := newUnleashRoute()
+
+	payload := `{
+		"allowed-teams": "team-z"
+	}`
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash/nonexistent/edit", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 404, w.Code) // Now returns proper 404 JSON error
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), "Instance not found")
+}
+
+func TestJSONAPI_UpdateUnleashInstance_ValidationError(t *testing.T) {
+	_, _, router := newUnleashRoute()
+
+	// Invalid log-level value
+	payload := `{
+		"log-level": "invalid-level"
+	}`
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash/team-a/edit", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 400, w.Code)
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), "validation")
+}
+
+func TestJSONAPI_DeleteUnleashInstance_Success(t *testing.T) {
 	_, service, router := newUnleashRoute()
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/unleash/team-a/delete", nil)
+	req, _ := http.NewRequest("DELETE", "/unleash/team-a", nil)
+	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "<h1 class=\"ui header\">Delete Unleash: team-a</h1>")
-	assert.Contains(t, w.Body.String(), "<form class=\"ui form\" method=\"POST\">")
 
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/team-a/delete", nil)
-	router.ServeHTTP(w, req)
-	assert.Equal(t, 400, w.Code)
-	assert.Contains(t, w.Body.String(), "Instance name does not match")
+	assert.Equal(t, 204, w.Code)                         // No content on successful delete
+	assert.Equal(t, 1, len(service.Instances))           // Verify instance was deleted
+	assert.Equal(t, "team-b", service.Instances[0].Name) // Only team-b remains
+}
 
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("POST", "/unleash/team-a/delete", strings.NewReader("name=team-a"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+func TestJSONAPI_DeleteUnleashInstance_NotFound(t *testing.T) {
+	_, _, router := newUnleashRoute()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("DELETE", "/unleash/nonexistent", nil)
+	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
-	assert.Equal(t, 302, w.Code)
-	assert.Equal(t, "/unleash", w.Header().Get("Location"))
-	assert.Equal(t, 1, len(service.Instances))
+
+	// After refactoring, we expect:
+	// assert.Equal(t, 404, w.Code)
+	// assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+
+	// For now, just document current behavior
+	assert.Equal(t, 404, w.Code)
 }

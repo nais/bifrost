@@ -3,8 +3,6 @@ package handler
 import (
 	"errors"
 	"fmt"
-	"html/template"
-	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,88 +13,47 @@ import (
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 )
 
+// ErrorResponse represents a standardized error response
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Details string `json:"details,omitempty"`
+}
+
+// UnleashResponse represents the response when creating or updating an Unleash instance
+type UnleashResponse struct {
+	*unleashv1.Unleash
+}
+
+// UnleashListResponse represents a list of Unleash instances
+type UnleashListResponse struct {
+	Instances []*unleash.UnleashInstance `json:"instances"`
+	Count     int                        `json:"count"`
+}
+
+// HealthHandler godoc
+//
+//	@Summary		Health check
+//	@Description	Check if the service is healthy
+//	@Tags			health
+//	@Produce		plain
+//	@Success		200	{string}	string	"OK"
+//	@Router			/healthz [get]
 func (h *Handler) HealthHandler(c *gin.Context) {
 	c.String(200, "OK")
 }
 
-func (h *Handler) ErrorHandler(c *gin.Context) {
-	c.Next()
-
-	errorToPrint := c.Errors.ByType(gin.ErrorTypePublic).Last()
-	if errorToPrint != nil {
-		h.logger.WithError(errorToPrint.Err).Error(errorToPrint.Meta)
-		c.HTML(500, "error.html", gin.H{
-			"title": "Error",
-			"error": errorToPrint.Meta,
-		})
-	}
-}
-
-func (h *Handler) UnleashIndex(c *gin.Context) {
-	ctx := c.Request.Context()
-	instances, err := h.unleashService.List(ctx)
-	if err != nil {
-		_ = c.Error(err).
-			SetType(gin.ErrorTypePublic).
-			SetMeta("Error getting unleash instances")
-		return
-	}
-
-	status := template.HTMLEscapeString(c.Query("status"))
-	c.HTML(200, "unleash-index.html", gin.H{
-		"title":     "Unleash as a Service (UaaS))",
-		"instances": instances,
-		"status":    status,
-	})
-}
-
-func (h *Handler) UnleashNew(c *gin.Context) {
-	unleashVersions, err := github.UnleashVersions()
-	if err != nil {
-		h.logger.WithError(err).Error("Error getting Unleash versions from Github")
-		unleashVersions = []github.UnleashVersion{}
-	}
-
-	obj := unleash.UnleashDefinition(h.config, &unleash.UnleashConfig{Name: "my-unleash"})
-	yamlString, err := utils.StructToYaml(obj)
-	if err != nil {
-		h.logger.WithError(err).Error("Error converting Unleash struct to yaml")
-		yamlString = "Parse error - see logs"
-	}
-
-	uc := unleash.UnleashConfig{
-		Name:                      "",
-		CustomVersion:             unleashVersions[0].GitTag,
-		EnableFederation:          true,
-		FederationNonce:           "",
-		AllowedTeams:              "",
-		AllowedNamespaces:         "",
-		AllowedClusters:           "dev-gcp,prod-gcp",
-		LogLevel:                  "warn",
-		DatabasePoolMax:           0,
-		DatabasePoolIdleTimeoutMs: 0,
-	}
-
-	c.HTML(200, "unleash-form.html", gin.H{
-		"title":           "New Unleash Instance",
-		"action":          "create",
-		"unleash":         uc,
-		"unleashVersions": unleashVersions,
-		"logLevel":        "warn",
-		"yaml":            yamlString,
-	})
-}
-
+// UnleashInstanceMiddleware loads the Unleash instance by ID
 func (h *Handler) UnleashInstanceMiddleware(c *gin.Context) {
 	teamName := c.Param("id")
 	ctx := c.Request.Context()
 
-	// @TODO check if user is allowed to access this instance
-
 	instance, err := h.unleashService.Get(ctx, teamName)
 	if err != nil {
 		h.logger.Info(err)
-		c.Redirect(301, "/unleash?status=not-found")
+		c.JSON(404, ErrorResponse{
+			Error:   "Instance not found",
+			Details: fmt.Sprintf("Unleash instance '%s' does not exist", teamName),
+		})
 		c.Abort()
 		return
 	}
@@ -105,58 +62,21 @@ func (h *Handler) UnleashInstanceMiddleware(c *gin.Context) {
 	c.Next()
 }
 
-func (h *Handler) UnleashInstanceShow(c *gin.Context) {
-	instance := c.MustGet("unleashInstance").(*unleash.UnleashInstance)
-	instanceYaml, err := utils.StructToYaml(instance.ServerInstance)
-	if err != nil {
-		h.logger.WithError(err).Error("Error converting Unleash struct to yaml")
-		instanceYaml = "Parse error - see logs"
-	}
-
-	uc := unleash.UnleashVariables(instance.ServerInstance, false)
-
-	c.HTML(200, "unleash-show.html", gin.H{
-		"title":              "Unleash: " + instance.Name,
-		"instance":           instance,
-		"unleash":            uc,
-		"googleProjectID":    h.config.Google.ProjectID,
-		"googleProjectURL":   h.config.GoogleProjectURL(""),
-		"sqlInstanceID":      h.config.Unleash.SQLInstanceID,
-		"sqlInstanceURL":     h.config.GoogleProjectURL(fmt.Sprintf("sql/instances/%s/overview", h.config.Unleash.SQLInstanceID)),
-		"sqlInstanceAddress": h.config.Unleash.SQLInstanceAddress,
-		"sqlInstanceRegion":  h.config.Unleash.SQLInstanceRegion,
-		"sqlDatabaseName":    instance.Name,
-		"sqlDatabaseUser":    instance.Name,
-		"sqlDatabaseSecret":  instance.Name,
-
-		"instanceYaml": template.HTML(instanceYaml),
-	})
-}
-
-func (h *Handler) UnleashInstanceEdit(c *gin.Context) {
-	instance := c.MustGet("unleashInstance").(*unleash.UnleashInstance)
-
-	uc := unleash.UnleashVariables(instance.ServerInstance, true)
-
-	unleashVersions, err := github.UnleashVersions()
-	if err != nil {
-		h.logger.WithError(err).Error("Error getting Unleash versions from Github")
-		unleashVersions = []github.UnleashVersion{}
-	}
-
-	c.HTML(200, "unleash-form.html", gin.H{
-		"title":           "Edit Unleash: " + instance.Name,
-		"action":          "edit",
-		"unleash":         uc,
-		"unleashVersions": unleashVersions,
-	})
-}
-
+// UnleashInstancePost godoc
+//
+//	@Summary		Create or update Unleash instance
+//	@Description	Create a new Unleash instance or update an existing one
+//	@Tags			unleash
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		unleash.UnleashConfig	true	"Unleash configuration"
+//	@Success		200		{object}	UnleashResponse			"Successfully created or updated"
+//	@Failure		400		{object}	ErrorResponse			"Invalid request or validation error"
+//	@Failure		500		{object}	ErrorResponse			"Internal server error"
+//	@Router			/unleash/new [post]
+//	@Router			/unleash/{id}/edit [post]
 func (h *Handler) UnleashInstancePost(c *gin.Context) {
-	var (
-		title, action string
-		err           error
-	)
+	var err error
 
 	ctx := c.Request.Context()
 	log := h.logger.WithContext(ctx)
@@ -166,9 +86,10 @@ func (h *Handler) UnleashInstancePost(c *gin.Context) {
 	if exists {
 		instance, ok := instance.(*unleash.UnleashInstance)
 		if !ok {
-			_ = c.Error(fmt.Errorf("could not convert instance to UnleashInstance")).
-				SetType(gin.ErrorTypePublic).
-				SetMeta("Error parsing existing Unleash instance")
+			c.JSON(500, ErrorResponse{
+				Error:   "Internal server error",
+				Details: "Error parsing existing Unleash instance",
+			})
 			return
 		}
 		uc = unleash.UnleashVariables(instance.ServerInstance, true)
@@ -187,12 +108,12 @@ func (h *Handler) UnleashInstancePost(c *gin.Context) {
 		}
 	}
 
-	if err = c.ShouldBind(uc); err != nil {
+	if err = c.ShouldBindJSON(uc); err != nil {
 		log.WithError(err).Error("Error binding post data to Unleash config")
-
-		_ = c.Error(err).
-			SetType(gin.ErrorTypePublic).
-			SetMeta("Error binding post data to Unleash config")
+		c.JSON(400, ErrorResponse{
+			Error:   "Invalid request body",
+			Details: err.Error(),
+		})
 		return
 	}
 
@@ -204,35 +125,15 @@ func (h *Handler) UnleashInstancePost(c *gin.Context) {
 		uc.SetDefaultValues(unleashVersions)
 	}
 
-	//  We are removing the differentiating between teams and namespaces, and merging them into one field
+	// We are removing the differentiating between teams and namespaces, and merging them into one field
 	uc.MergeTeamsAndNamespaces()
 
 	if validationErr := uc.Validate(); validationErr != nil {
 		log.WithError(validationErr).Error("Error validating Unleash config")
-
-		if exists {
-			title = "Edit Unleash: " + uc.Name
-			action = "edit"
-		} else {
-			title = "New Unleash Instance"
-			action = "create"
-		}
-
-		if c.ContentType() == "application/json" {
-			c.JSON(400, gin.H{
-				"error":           "Input validation failed, see errors in details",
-				"validationError": validationErr.Error(),
-			})
-		} else {
-			c.HTML(400, "unleash-form.html", gin.H{
-				"title":           title,
-				"action":          action,
-				"unleash":         uc,
-				"unleashVersions": unleashVersions,
-				"validationError": validationErr,
-				"error":           "Input validation failed, see errors in details",
-			})
-		}
+		c.JSON(400, ErrorResponse{
+			Error:   "Validation failed",
+			Details: validationErr.Error(),
+		})
 		return
 	}
 
@@ -247,56 +148,45 @@ func (h *Handler) UnleashInstancePost(c *gin.Context) {
 	if err != nil {
 		var unleashErr *unleash.UnleashError
 
-		reason := "Error persisting Unleash instance, check server logs"
 		if errors.As(err, &unleashErr) {
-			err = unleashErr.Err
-			reason = fmt.Sprintf("Error persisting Unleash instance, %s", unleashErr.Reason)
+			c.JSON(500, ErrorResponse{
+				Error:   "Error persisting Unleash instance",
+				Details: unleashErr.Reason,
+			})
+		} else {
+			c.JSON(500, ErrorResponse{
+				Error:   "Error persisting Unleash instance",
+				Details: err.Error(),
+			})
 		}
-
-		_ = c.Error(err).
-			SetType(gin.ErrorTypePublic).
-			SetMeta(reason)
 		return
 	}
 
-	if c.ContentType() == "application/json" {
-		c.JSON(200, unleashInstance)
-		return
-	}
-
-	c.Redirect(302, "/unleash/"+uc.Name)
+	c.JSON(200, UnleashResponse{Unleash: unleashInstance})
 }
 
+// UnleashInstanceDelete godoc
+//
+//	@Summary		Delete Unleash instance
+//	@Description	Delete an existing Unleash instance by name
+//	@Tags			unleash
+//	@Produce		json
+//	@Param			id	path	string	true	"Instance name"
+//	@Success		204	"Successfully deleted"
+//	@Failure		404	{object}	ErrorResponse	"Instance not found"
+//	@Failure		500	{object}	ErrorResponse	"Internal server error"
+//	@Router			/unleash/{id} [delete]
 func (h *Handler) UnleashInstanceDelete(c *gin.Context) {
 	instance := c.MustGet("unleashInstance").(*unleash.UnleashInstance)
-
-	c.HTML(200, "unleash-delete.html", gin.H{
-		"title": "Delete Unleash: " + instance.Name,
-		"name":  instance.Name,
-	})
-}
-
-func (h *Handler) UnleashInstanceDeletePost(c *gin.Context) {
-	instance := c.MustGet("unleashInstance").(*unleash.UnleashInstance)
-
 	ctx := c.Request.Context()
-	name := regexp.MustCompile(`[^a-zA-Z0-9-]`).ReplaceAllString(c.PostForm("name"), "")
 
-	if name != instance.Name {
-		c.HTML(400, "unleash-delete.html", gin.H{
-			"title": "Delete Unleash: " + instance.Name,
-			"name":  instance.Name,
-			"error": "Instance name does not match",
+	if err := h.unleashService.Delete(ctx, instance.Name); err != nil {
+		c.JSON(500, ErrorResponse{
+			Error:   "Error deleting Unleash instance",
+			Details: err.Error(),
 		})
 		return
 	}
 
-	if err := h.unleashService.Delete(ctx, instance.Name); err != nil {
-		_ = c.Error(err).
-			SetType(gin.ErrorTypePublic).
-			SetMeta("Error deleting unleash instance")
-		return
-	}
-
-	c.Redirect(302, "/unleash")
+	c.Status(204) // No content on successful delete
 }
