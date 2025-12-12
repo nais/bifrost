@@ -1,7 +1,7 @@
 package utils
 
 import (
-	"gopkg.in/yaml.v2"
+	yaml "gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 

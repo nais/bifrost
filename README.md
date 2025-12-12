@@ -1,92 +1,260 @@
 # Bifröst
 
-Bifröst is a portal for managing Frontend Platform resources. In Norse mythology, Bifröst is a bridge that connects Midgard, the realm of humans, with Asgard, the realm of the gods. At NAV Bifröst is a bridge that connects developers with the resources they need to build and run their frontend applications.
+> Fleet management API for Unleash feature toggle instances
 
-## Features
+Bifröst provides centralized management of Unleash instances in Kubernetes, with support for automated version management through release channels. Named after the Norse bridge connecting realms, Bifröst connects development teams with their feature toggle infrastructure.
 
-* [x] Manage Unleash Instances
+## Overview
 
-## Pre-requisites
+Bifröst is a REST API that orchestrates Unleash deployments on Kubernetes, handling:
 
-### Google Clooud Service Account
+- **Instance lifecycle management** - Create, update, and delete Unleash instances
+- **Release channel automation** - Automatically upgrade instances via scheduled release channels
+- **Database provisioning** - Automated PostgreSQL database creation per instance
+- **Network policy management** - Secure instance isolation with FQDN-based policies
+- **Multi-tenancy** - Team-based access control and resource isolation
 
-Bifröst needs a Google Cloud service account with the following roles:
+## Quick Start
 
-* Cloud SQL Admin
+```bash
+# Create an Unleash instance with a specific version
+curl -X POST http://bifrost/v1/instances \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-unleash",
+    "custom_version": "5.11.0",
+    "allowed_teams": "team-a,team-b"
+  }'
 
-### Google Cloud Resources
+# Or use a release channel for automatic updates
+curl -X POST http://bifrost/v1/instances \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-unleash",
+    "release_channel_name": "stable",
+    "allowed_teams": "team-a,team-b"
+  }'
+```
 
-Bifröst needs the following Google Cloud resources:
+## API Reference
 
-* A Google Cloud PostgreSQL instance for Unleash databases
+Bifröst exposes two API versions:
 
-### Kubernetes Resources
+### v0 API (Legacy)
 
-Bifröst needs the following Kubernetes resources:
+Backward-compatible API for existing clients. Only supports custom version management (release channels are filtered out).
 
-* [Unleasherator](https://github.com/nais/unleasherator)
-* [FQDN Network Policy Operator](https://github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang)
+**Endpoints:**
+
+```http
+GET    /healthz                  - Health check
+POST   /unleash/new              - Create new instance (custom version only)
+POST   /unleash/:id/edit         - Update existing instance
+DELETE /unleash/:id              - Delete instance
+```
+
+**Create/Update Request:**
+
+```json
+{
+  "name": "my-unleash",
+  "custom-version": "5.10.2",
+  "enable-federation": true,
+  "allowed-teams": "team-a,team-b",
+  "log-level": "info",
+  "database-pool-max": 5,
+  "database-pool-idle-timeout-ms": 2000
+}
+```
+
+> **Note:** Instances managed by release channels are hidden from v0 endpoints.
+
+### v1 API (Recommended)
+
+Full-featured API with release channel support and structured error responses.
+
+**Endpoints:**
+
+```http
+GET    /v1/instances             - List all instances (includes channel-managed)
+GET    /v1/instances/:name       - Get instance details
+POST   /v1/instances             - Create new instance
+PUT    /v1/instances/:name       - Update instance
+DELETE /v1/instances/:name       - Delete instance
+
+GET    /v1/channels              - List all release channels
+GET    /v1/channels/:name        - Get channel details
+```
+
+**Create/Update Instance:**
+
+```json
+{
+  "name": "my-unleash",
+  "custom_version": "5.10.2",          // OR
+  "release_channel_name": "stable",    // (mutually exclusive)
+  "enable_federation": true,
+  "allowed_teams": "team-a,team-b",
+  "log_level": "info",
+  "database_pool_max": 5,
+  "database_pool_idle_timeout_ms": 2000
+}
+```
+
+**Response Format:**
+
+```json
+{
+  "name": "my-unleash",
+  "version": "5.10.2",
+  "custom_version": "5.10.2",          // if using custom version
+  "release_channel_name": "stable",    // if using release channel
+  "is_ready": true,
+  "api_url": "https://my-unleash-api.example.com/api/",
+  "web_url": "https://my-unleash.example.com/",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+**Release Channel Response:**
+
+```json
+{
+  "name": "stable",
+  "version": "5.11.0",
+  "type": "sequential",
+  "schedule": "0 2 * * 1",
+  "description": "Stable release channel",
+  "current_version": "5.11.0",
+  "last_updated": "2024-03-15T10:30:00Z",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Configuration validation failed",
+  "details": {
+    "validation": "cannot specify both custom_version and release_channel_name"
+  },
+  "status_code": 400
+}
+```
+
+## Architecture
+
+Bifröst operates as a Kubernetes-native control plane:
+
+```text
+┌─────────────┐
+│   Bifröst   │ (REST API)
+│   API       │
+└──────┬──────┘
+       │
+       ├──► Kubernetes ──► Unleasherator CRDs ──► Unleash Pods
+       │
+       └──► Google Cloud SQL ──► PostgreSQL Databases
+```
+
+### Dependencies
+
+**Kubernetes Operators:**
+
+- [Unleasherator](https://github.com/nais/unleasherator) - Unleash instance controller
+- [FQDN Network Policy](https://github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang) - Network isolation
+
+**Google Cloud:**
+
+- Cloud SQL (PostgreSQL) for Unleash databases
+- Service account with **Cloud SQL Admin** role
 
 ## Configuration
 
-Bifröst is configured using environment variables. The following variables are required:
+Bifröst is configured via environment variables.
 
 ### Google Configuration
 
 | Variable                    | Description                 |
-|-----------------------------|-----------------------------|
+| --------------------------- | --------------------------- |
 | `BIFROST_GOOGLE_PROJECT_ID` | The Google Cloud project ID |
 
 ### OAuth JWT Configuration
 
+| Variable                                          | Description                                |
+| ------------------------------------------------- | ------------------------------------------ |
+| `BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE` | Expected audience for OAuth JWT validation |
 
-| Variable                                          | Description                                    |
-|---------------------------------------------------|------------------------------------------------|
-| `BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE` | The expected audience for OAuth JWT validation |
+### Unleash Configuration
 
-### Unleash Configuration**
+| Variable                                     | Description                                                   |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| `BIFROST_UNLEASH_INSTANCE_NAMESPACE`         | The Kubernetes namespace where Unleash instances are deployed |
+| `BIFROST_UNLEASH_INSTANCE_SERVICE_ACCOUNT`   | The Kubernetes service account used by Unleash instances      |
+| `BIFROST_UNLEASH_SQL_INSTANCE_ID`            | The SQL instance ID for Unleash databases                     |
+| `BIFROST_UNLEASH_SQL_INSTANCE_REGION`        | The SQL instance region for Unleash databases                 |
+| `BIFROST_UNLEASH_SQL_INSTANCE_ADDRESS`       | The SQL instance address for Unleash databases                |
+| `BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_HOST`  | The ingress host for Unleash instances Web UI                 |
+| `BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_CLASS` | The ingress class for Unleash instances Web UI                |
+| `BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST`  | The ingress host for Unleash instances API                    |
+| `BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS` | The ingress class for Unleash instances API                   |
 
-| Variable | Description |
-| -------- |  ------- |
-| `BIFROST_UNLEASH_INSTANCE_NAMESPACE` | The Kubernetes namespace where Unleash instances are deployed |
-| `BIFROST_UNLEASH_INSTANCE_SERVICE_ACCOUNT` | The Kubernetes service account used by Unleash instances |
-| `BIFROST_UNLEASH_SQL_INSTANCE_ID` | The SQL instance ID for Unleash databases |
-| `BIFROST_UNLEASH_SQL_INSTANCE_REGION` | The SQL instance region for Unleash databases |
-| `BIFROST_UNLEASH_SQL_INSTANCE_ADDRESS` | The SQL instance address for Unleash databases |
-| `BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_HOST` | The ingress host for Unleash instances Web UI |
-| `BIFROST_UNLEASH_INSTANCE_WEB_INGRESS_CLASS` | The ingress class for Unleash instances Web UI |
-| `BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST` | The ingress host for Unleash instances API |
-| `BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS` | The ingress class for Unleash instances API |
+## Development
 
-## Local development
+### Prerequisites
 
-### Prerequisite
+- Go 1.21+
+- Local Kubernetes cluster (kind, k3d, or minikube)
+- Google Cloud service account with Cloud SQL Admin role
 
-* Google Cloud Service Account
-* Local Kubernetes Cluster
+### Setup
 
-With you local Kubernetes cluster apply the required custom resource definitions:
+Install required CRDs in your local cluster:
 
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/main/config/crd/bases/networking.gke.io_fqdnnetworkpolicies.yaml
 kubectl apply -f https://raw.githubusercontent.com/nais/unleasherator/main/config/crd/bases/unleash.nais.io_unleashes.yaml
 ```
 
-### Environment variables
+### Local Environment
 
-The following environment variables needs to be set in addition to the configuration variables above:
+Set these variables for local development:
 
-| Variable | Value | Description |
-| -------- |  ---- | ----------- |
-| `BIFROST_SERVER_HOST` | `127.0.0.1` | The host for the Bifröst server |
-| `GOOGLE_APPLICATION_CREDENTIALS` | <path-to-file> | Google Cloud service account credentials |
-| `KUBECONFIG` | <path-to-file> | Path to Kubernetes configuration file |
+| Variable                         | Example          | Description              |
+| -------------------------------- | ---------------- | ------------------------ |
+| `BIFROST_SERVER_HOST`            | `127.0.0.1`      | API server bind address  |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `~/gcp/key.json` | Service account key file |
+| `KUBECONFIG`                     | `~/.kube/config` | Kubernetes config file   |
 
-### Start the server
+### Running
 
-```shell
-make start
+```bash
+# Start the API server
+mise run start
+
+# Run tests
+mise run test
+
+# Build binary
+mise run build
+
+# Run all checks
+mise run all
 ```
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+
+- Tests pass (`mise run test`)
+- Code is formatted (`mise run fmt`)
+- Linting passes (`mise run lint`)
+
+## Support
+
+For issues and feature requests, please use the [GitHub issue tracker](https://github.com/nais/bifrost/issues).
 
 ## License
 

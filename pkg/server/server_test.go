@@ -78,7 +78,7 @@ func TestHealthzRoute(t *testing.T) {
 	logger := logrus.New()
 	service := &MockUnleashService{c: config}
 
-	router := setupRouter(config, logger, service)
+	router := setupRouter(config, logger, service, nil, nil)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/healthz", nil)
 	router.ServeHTTP(w, req)
@@ -138,7 +138,7 @@ func newUnleashRoute() (c *config.Config, service *MockUnleashService, router *g
 		},
 	}
 
-	router = setupRouter(c, logger, service)
+	router = setupRouter(c, logger, service, nil, nil)
 
 	return
 }

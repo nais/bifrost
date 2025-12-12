@@ -529,6 +529,15 @@
                 }
             }
         },
+        "unleash_nais_io_v1.UnleashReleaseChannelConfig": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "description": "Name is the name of the release channel\n+kubebuilder:validation:Optional",
+                    "type": "string"
+                }
+            }
+        },
         "unleash_nais_io_v1.UnleashSpec": {
             "type": "object",
             "properties": {
@@ -622,6 +631,14 @@
                         }
                     ]
                 },
+                "releaseChannel": {
+                    "description": "ReleaseChannel is the release channel to use for the Unleash deployment.\n+kubebuilder:validation:Optional",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/unleash_nais_io_v1.UnleashReleaseChannelConfig"
+                        }
+                    ]
+                },
                 "resources": {
                     "description": "Resources are the resource requests and limits for the Unleash deployment.\n+kubebuilder:validation:Optional\n+kubebuilder:default:={requests: {cpu: \"300m\", memory: \"256Mi\"}, limits: { memory: \"512Mi\"}}",
                     "allOf": [
@@ -661,6 +678,14 @@
                 "reconciled": {
                     "description": "Reconciled is true when the Unleash resources hav been reconciled\nsuccessfully.\nThis is used for kubectl printing purposes. Rather than relying on this\nvalue, check the conditions instead.\n+kubebuilder:default=false",
                     "type": "boolean"
+                },
+                "releaseChannelName": {
+                    "description": "ReleaseChannelName tracks which ReleaseChannel was used to resolve the image\nThis ensures we only use the resolved image if it matches the current ReleaseChannel\n+kubebuilder:validation:Optional",
+                    "type": "string"
+                },
+                "resolvedReleaseChannelImage": {
+                    "description": "ResolvedReleaseChannelImage is the image resolved from the ReleaseChannel\nThis is set by the controller when a ReleaseChannel is specified and tracks\nthe current image that should be used for this Unleash instance.\n+kubebuilder:validation:Optional",
+                    "type": "string"
                 },
                 "version": {
                     "description": "Version is the reported version of the Unleash server\n+kubebuilder:default=\"unknown\"",
