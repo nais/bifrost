@@ -12,10 +12,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   build-and-deploy:
-    uses: ./.github/workflows/go-mise-build-deploy.yaml
-    secrets: inherit
+    uses: nais/actions/.github/workflows/mise-build-deploy-fasit.yaml@e6eeb636a4e6274711288cbec3c22f43a3db8600 # ratchet:nais/actions/.github/workflows/mise-build-deploy-fasit.yaml@main
+    secrets:
+      NAIS_IO_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.NAIS_IO_WORKLOAD_IDENTITY_PROVIDER }}
     with:
       mise-tasks: '["tidy-check", "fmt-check", "lint", "vet", "check", "test-race"]'
       builds-docker: true
