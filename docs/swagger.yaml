@@ -328,6 +328,14 @@ definitions:
           +kubebuilder:default=true
         type: boolean
     type: object
+  unleash_nais_io_v1.UnleashReleaseChannelConfig:
+    properties:
+      name:
+        description: |-
+          Name is the name of the release channel
+          +kubebuilder:validation:Optional
+        type: string
+    type: object
   unleash_nais_io_v1.UnleashSpec:
     properties:
       apiIngress:
@@ -413,6 +421,12 @@ definitions:
         description: |-
           Prometheus defines the Prometheus metrics collection configuration.
           +kubebuilder:validation:Optional
+      releaseChannel:
+        allOf:
+        - $ref: '#/definitions/unleash_nais_io_v1.UnleashReleaseChannelConfig'
+        description: |-
+          ReleaseChannel is the release channel to use for the Unleash deployment.
+          +kubebuilder:validation:Optional
       resources:
         allOf:
         - $ref: '#/definitions/v1.ResourceRequirements'
@@ -461,6 +475,19 @@ definitions:
           value, check the conditions instead.
           +kubebuilder:default=false
         type: boolean
+      releaseChannelName:
+        description: |-
+          ReleaseChannelName tracks which ReleaseChannel was used to resolve the image
+          This ensures we only use the resolved image if it matches the current ReleaseChannel
+          +kubebuilder:validation:Optional
+        type: string
+      resolvedReleaseChannelImage:
+        description: |-
+          ResolvedReleaseChannelImage is the image resolved from the ReleaseChannel
+          This is set by the controller when a ReleaseChannel is specified and tracks
+          the current image that should be used for this Unleash instance.
+          +kubebuilder:validation:Optional
+        type: string
       version:
         description: |-
           Version is the reported version of the Unleash server

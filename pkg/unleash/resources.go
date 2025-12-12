@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-playground/validator/v10"
+	validator "github.com/go-playground/validator/v10"
 	"github.com/nais/bifrost/pkg/config"
-	"github.com/nais/bifrost/pkg/github"
+	"github.com/nais/bifrost/pkg/infrastructure/github"
 	"github.com/nais/bifrost/pkg/utils"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"

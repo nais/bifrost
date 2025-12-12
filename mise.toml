@@ -1,0 +1,94 @@
+# mise - polyglot task runner configuration
+# https://mise.jdx.dev/
+
+[tools]
+go = "1.25"
+"go:mvdan.cc/gofumpt" = "latest"
+"go:github.com/golangci/golangci-lint/cmd/golangci-lint" = "latest"
+"go:honnef.co/go/tools/cmd/staticcheck" = "latest"
+"go:golang.org/x/vuln/cmd/govulncheck" = "latest"
+"go:github.com/swaggo/swag/cmd/swag" = "latest"
+"go:github.com/sethvargo/ratchet" = "latest"
+
+[tasks.version]
+description = "Generate version tag"
+run = "echo $(date +'%Y%m%d')-$(git rev-parse --short HEAD)"
+
+[tasks.fmt]
+description = "Format Go code"
+run = "gofumpt -w ."
+
+[tasks.fmt-check]
+description = "Check Go code formatting"
+run = "gofumpt -l . | (! grep .)"
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run --timeout=10m"
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.tidy]
+description = "Tidy and verify go.mod"
+run = ["go mod tidy", "go mod verify"]
+
+[tasks.tidy-check]
+description = "Check if go.mod is tidy"
+run = ["go mod tidy", "git diff --exit-code go.mod go.sum"]
+
+[tasks.check]
+description = "Run linter and static analysis"
+run = ["staticcheck ./...", "govulncheck ./..."]
+
+[tasks.test]
+description = "Run tests"
+run = "go test ./..."
+
+[tasks.test-race]
+description = "Run tests with race detector"
+run = "go test -race ./..."
+
+[tasks.test-coverage]
+description = "Run tests with coverage"
+run = "go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out -o coverage.html"
+
+[tasks.swagger]
+description = "Generate Swagger documentation"
+run = "swag init --parseDependency --parseInternal"
+
+[tasks.build]
+description = "Build binary"
+depends = ["swagger"]
+run = '''
+BUILDTIME=$(date "+%s")
+DATE=$(date "+%Y-%m-%d")
+LAST_COMMIT=$(git rev-parse --short HEAD)
+LDFLAGS="-s -X github.com/nais/bifrost/pkg/version.Revision=${LAST_COMMIT} -X github.com/nais/bifrost/pkg/version.Date=${DATE} -X github.com/nais/bifrost/pkg/version.BuildUnixTime=${BUILDTIME}"
+go build -o bin/bifrost -ldflags "${LDFLAGS}" .
+'''
+
+[tasks.start]
+description = "Start the application"
+run = "go run main.go run"
+
+[tasks.docker]
+description = "Build Docker image"
+run = "docker build -t ghcr.io/nais/bifrost:main ."
+
+[tasks.ratchet-pin]
+description = "Pin GitHub Actions to commit SHAs"
+run = "ratchet pin .github/workflows/*.yaml"
+
+[tasks.ratchet-update]
+description = "Update pinned GitHub Actions to latest versions"
+run = "ratchet update .github/workflows/*.yaml"
+
+[tasks.ratchet-check]
+description = "Check if GitHub Actions are pinned"
+run = "ratchet lint .github/workflows/*.yaml"
+
+[tasks.all]
+description = "Run all checks and build"
+depends = ["tidy", "fmt", "lint", "vet", "check", "test", "build"]

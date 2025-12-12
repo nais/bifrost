@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nais/bifrost/pkg/github"
+	"github.com/nais/bifrost/pkg/infrastructure/github"
 	"github.com/nais/bifrost/pkg/unleash"
 	"github.com/nais/bifrost/pkg/utils"
 

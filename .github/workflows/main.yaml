@@ -1,0 +1,24 @@
+name: Build and Deploy
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    uses: ./.github/workflows/go-mise-build-deploy.yaml
+    secrets: inherit
+    with:
+      mise-tasks: '["tidy-check", "fmt-check", "lint", "vet", "check", "test-race"]'
+      builds-docker: true
+      builds-chart: true
+      deploys-to-fasit: true
+      creates-git-tag: true
