@@ -1,4 +1,5 @@
 ---
+{{- if .Values.metrics.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -15,3 +16,4 @@ spec:
   selector:
     matchLabels:
       {{- include "bifrost.selectorLabels" . | nindent 6 }}
+{{- end }}
