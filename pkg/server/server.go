@@ -103,7 +103,7 @@ func setupRouter(config *config.Config, logger *logrus.Logger, unleashService un
 	v0Handlers := v0handlers.NewHandler(config, logger, unleashService)
 
 	// v1 handlers (new)
-	v1Handlers := v1handlers.NewUnleashHandler(v1Service, config, logger)
+	v1Handlers := v1handlers.NewUnleashHandler(v1Service, config, logger, releaseChannelRepo)
 	v1ChannelHandlers := v1handlers.NewReleaseChannelHandler(releaseChannelRepo, logger)
 
 	// Swagger UI

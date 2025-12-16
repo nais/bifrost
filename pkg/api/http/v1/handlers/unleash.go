@@ -1,27 +1,34 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/gin-gonic/gin"
 	"github.com/nais/bifrost/pkg/api/dto"
 	"github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
+	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	"github.com/nais/bifrost/pkg/infrastructure/github"
 	"github.com/sirupsen/logrus"
 )
 
 type UnleashHandler struct {
-	service *unleash.Service
-	config  *config.Config
-	logger  *logrus.Logger
+	service            *unleash.Service
+	config             *config.Config
+	logger             *logrus.Logger
+	releaseChannelRepo releasechannel.Repository
 }
 
-func NewUnleashHandler(service *unleash.Service, config *config.Config, logger *logrus.Logger) *UnleashHandler {
+func NewUnleashHandler(service *unleash.Service, config *config.Config, logger *logrus.Logger, releaseChannelRepo releasechannel.Repository) *UnleashHandler {
 	return &UnleashHandler{
-		service: service,
-		config:  config,
-		logger:  logger,
+		service:            service,
+		config:             config,
+		logger:             logger,
+		releaseChannelRepo: releaseChannelRepo,
 	}
 }
 
@@ -150,6 +157,43 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 
 	req.Name = name
 
+	// Check if switching release channels and validate major version
+	if req.ReleaseChannelName != "" {
+		existing, err := h.service.Get(ctx, name)
+		if err != nil {
+			h.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Instance not found")
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Error:      "not_found",
+				Message:    "Unleash instance not found",
+				Details:    map[string]string{"instance": name},
+				StatusCode: http.StatusNotFound,
+			})
+			return
+		}
+
+		// If instance has a release channel and switching to a different one, validate major version
+		if existing.ReleaseChannelName != "" && existing.ReleaseChannelName != req.ReleaseChannelName {
+			if err := h.validateReleaseChannelSwitch(ctx, existing.ReleaseChannelName, req.ReleaseChannelName); err != nil {
+				h.logger.WithContext(ctx).WithError(err).WithFields(logrus.Fields{
+					"instance":    name,
+					"old_channel": existing.ReleaseChannelName,
+					"new_channel": req.ReleaseChannelName,
+				}).Warn("Release channel switch validation failed")
+				c.JSON(http.StatusBadRequest, ErrorResponse{
+					Error:   "invalid_channel_switch",
+					Message: "Cannot switch to release channel with lower major version",
+					Details: map[string]string{
+						"old_channel": existing.ReleaseChannelName,
+						"new_channel": req.ReleaseChannelName,
+						"error":       err.Error(),
+					},
+					StatusCode: http.StatusBadRequest,
+				})
+				return
+			}
+		}
+	}
+
 	builder := req.ToConfigBuilder()
 	builder.MergeTeamsAndNamespaces()
 
@@ -219,4 +263,59 @@ func (h *UnleashHandler) DeleteInstance(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// validateReleaseChannelSwitch validates that switching from one release channel to another
+// doesn't result in a major version downgrade
+func (h *UnleashHandler) validateReleaseChannelSwitch(ctx context.Context, oldChannelName, newChannelName string) error {
+	// Get old channel
+	oldChannel, err := h.releaseChannelRepo.Get(ctx, oldChannelName)
+	if err != nil {
+		return fmt.Errorf("failed to get old release channel %s: %w", oldChannelName, err)
+	}
+
+	// Get new channel
+	newChannel, err := h.releaseChannelRepo.Get(ctx, newChannelName)
+	if err != nil {
+		return fmt.Errorf("failed to get new release channel %s: %w", newChannelName, err)
+	}
+
+	// Parse old version
+	oldVersion := oldChannel.Version
+	if oldVersion == "" {
+		oldVersion = oldChannel.Status.CurrentVersion
+	}
+	oldVersion = strings.TrimPrefix(oldVersion, "v")
+	oldSemver, err := semver.NewVersion(oldVersion)
+	if err != nil {
+		return fmt.Errorf("failed to parse old channel version %s: %w", oldVersion, err)
+	}
+
+	// Parse new version
+	newVersion := newChannel.Version
+	if newVersion == "" {
+		newVersion = newChannel.Status.CurrentVersion
+	}
+	newVersion = strings.TrimPrefix(newVersion, "v")
+	newSemver, err := semver.NewVersion(newVersion)
+	if err != nil {
+		return fmt.Errorf("failed to parse new channel version %s: %w", newVersion, err)
+	}
+
+	// Compare major versions
+	if newSemver.Major() < oldSemver.Major() {
+		return fmt.Errorf("cannot downgrade from major version %d to %d", oldSemver.Major(), newSemver.Major())
+	}
+
+	h.logger.WithContext(ctx).WithFields(logrus.Fields{
+		"old_channel":       oldChannelName,
+		"old_version":       oldVersion,
+		"old_major":         oldSemver.Major(),
+		"new_channel":       newChannelName,
+		"new_version":       newVersion,
+		"new_major":         newSemver.Major(),
+		"version_permitted": true,
+	}).Debug("Release channel switch validation passed")
+
+	return nil
 }
