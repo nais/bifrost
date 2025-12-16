@@ -87,6 +87,10 @@ spec:
               value: {{ .Values.backend.unleash.teamsApiTokenSecretName | required ".unleash.teamsApiTokenSecretName is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY
               value: {{ .Values.backend.unleash.teamsApiTokenSecretKey | required ".unleash.teamsApiTokenSecretKey is required" | quote }}
+            {{- if .Values.backend.unleash.defaultReleaseChannel }}
+            - name: BIFROST_UNLEASH_DEFAULT_RELEASE_CHANNEL
+              value: {{ .Values.backend.unleash.defaultReleaseChannel | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080

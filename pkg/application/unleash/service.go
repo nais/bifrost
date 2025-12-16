@@ -5,22 +5,40 @@ import (
 
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/unleash"
-	"github.com/nais/bifrost/pkg/infrastructure/cloudsql"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// IService defines the interface for unleash instance management operations
+type IService interface {
+	List(ctx context.Context, excludeChannelInstances bool) ([]*unleash.Instance, error)
+	Get(ctx context.Context, name string) (*unleash.Instance, error)
+	Create(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error)
+	Update(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error)
+	Delete(ctx context.Context, name string) error
+}
+
+// DatabaseManager defines the interface for database operations
+type DatabaseManager interface {
+	CreateDatabase(ctx context.Context, name string) error
+	CreateDatabaseUser(ctx context.Context, name string) (string, error)
+	CreateSecret(ctx context.Context, name string, password string) error
+	DeleteDatabase(ctx context.Context, name string) error
+	DeleteDatabaseUser(ctx context.Context, name string) error
+	DeleteSecret(ctx context.Context, name string) error
+}
+
 // Service orchestrates unleash instance management operations
 type Service struct {
 	repository unleash.Repository
-	dbManager  *cloudsql.Manager
+	dbManager  DatabaseManager
 	config     *config.Config
 	logger     *logrus.Logger
 }
 
 // NewService creates a new unleash application service
-func NewService(repository unleash.Repository, dbManager *cloudsql.Manager, config *config.Config, logger *logrus.Logger) *Service {
+func NewService(repository unleash.Repository, dbManager DatabaseManager, config *config.Config, logger *logrus.Logger) *Service {
 	return &Service{
 		repository: repository,
 		dbManager:  dbManager,

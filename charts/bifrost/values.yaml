@@ -35,6 +35,9 @@ backend:
     # Unleash web oauth config
     # webOAuthJWTAudience: # mapped in fasit
 
+    # Default release channel for new instances (optional)
+    defaultReleaseChannel: "stable"
+
     # Unleash teams config
     teamsApiUrl: https://console.nav.cloud.nais.io/graphql
     # teamsApiToken:  # mapped in fasit

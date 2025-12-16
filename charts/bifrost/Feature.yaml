@@ -33,6 +33,10 @@ values:
     displayName: Api Ingress Host
     computed:
       template: '"{{ subdomain . "unleash-api" }}"'
+  backend.unleash.defaultReleaseChannel:
+    displayName: Default release channel for new instances
+    config:
+      type: string
   backend.unleash.googleServiceAccountEmail:
     displayName: Biforst unleash Google service account email
     computed:
