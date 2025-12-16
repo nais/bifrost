@@ -109,6 +109,8 @@ func TestListChannels_Success(t *testing.T) {
 	assert.Equal(t, response[0].Image, response[0].Version, "Version should equal Image for backwards compatibility")
 	// CurrentVersion comes from status.version which is typically empty until set by the controller
 	assert.Equal(t, "", response[0].CurrentVersion, "CurrentVersion should be empty when status.version is not set")
+	// LastUpdated comes from status.lastReconcileTime
+	assert.Equal(t, "2024-03-15T10:30:00Z", response[0].LastUpdated, "LastUpdated should be populated from lastReconcileTime")
 
 	// Verify second channel
 	assert.Equal(t, "rapid", response[1].Name)
@@ -205,10 +207,11 @@ func TestGetChannel_Success(t *testing.T) {
 	assert.Equal(t, "stable", response.Name)
 	assert.Equal(t, "quay.io/unleash/unleash-server:5.11.0", response.Image)
 	assert.Equal(t, "2024-01-01T00:00:00Z", response.CreatedAt)
+	// Verify status fields
+	assert.Equal(t, "", response.CurrentVersion)
+	assert.Equal(t, "2024-03-15T10:30:00Z", response.LastUpdated)
 	// Legacy fields
 	assert.Equal(t, response.Image, response.Version)
-	// CurrentVersion from status.version (typically empty until set by controller)
-	assert.Equal(t, "", response.CurrentVersion)
 }
 
 func TestGetChannel_WithoutLastReconciled(t *testing.T) {
@@ -248,7 +251,7 @@ func TestGetChannel_WithoutLastReconciled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "testing", response.Name)
 	assert.Equal(t, "quay.io/unleash/unleash-server:5.13.0-rc.1", response.Image)
-	assert.Empty(t, response.LastUpdated, "LastUpdated should be empty (reserved for future use)")
+	assert.Empty(t, response.LastUpdated, "LastUpdated should be empty when lastReconcileTime is zero")
 }
 
 func TestGetChannel_NotFound(t *testing.T) {

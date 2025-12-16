@@ -353,7 +353,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_updated": {
-                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
+                    "description": "LastUpdated is when the release channel was last reconciled",
                     "type": "string"
                 },
                 "name": {

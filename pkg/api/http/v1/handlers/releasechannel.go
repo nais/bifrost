@@ -29,6 +29,9 @@ type ReleaseChannelResponse struct {
 	// CurrentVersion is the current version tracked by the release channel status
 	CurrentVersion string `json:"current_version"`
 
+	// LastUpdated is when the release channel was last reconciled
+	LastUpdated string `json:"last_updated,omitempty"`
+
 	// Legacy fields - kept for backwards compatibility
 	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
 	Version string `json:"version"`
@@ -38,8 +41,6 @@ type ReleaseChannelResponse struct {
 	Schedule string `json:"schedule,omitempty"`
 	// Deprecated: This field is reserved for future use and always returns an empty string.
 	Description string `json:"description,omitempty"`
-	// Deprecated: This field is reserved for future use and always returns an empty string.
-	LastUpdated string `json:"last_updated,omitempty"`
 }
 
 // ListChannels godoc
@@ -103,6 +104,11 @@ func (h *ReleaseChannelHandler) GetChannel(c *gin.Context) {
 }
 
 func toReleaseChannelResponse(channel *releasechannel.Channel) ReleaseChannelResponse {
+	lastUpdated := ""
+	if !channel.Status.LastReconcileTime.IsZero() {
+		lastUpdated = channel.Status.LastReconcileTime.Time.Format("2006-01-02T15:04:05Z07:00")
+	}
+
 	return ReleaseChannelResponse{
 		// Core fields
 		Name:      channel.Name,
@@ -112,8 +118,11 @@ func toReleaseChannelResponse(channel *releasechannel.Channel) ReleaseChannelRes
 		// Current version from release channel status
 		CurrentVersion: channel.Status.Version,
 
+		// Last reconcile time from status
+		LastUpdated: lastUpdated,
+
 		// Legacy fields - kept for backwards compatibility
 		Version: channel.Image, // Deprecated: same as image
-		// Type, Schedule, Description, LastUpdated left empty - reserved for future use
+		// Type, Schedule, Description left empty - reserved for future use
 	}
 }
