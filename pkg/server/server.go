@@ -6,11 +6,11 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	v0handlers "github.com/nais/bifrost/pkg/api/http/v0/handlers"
 	v1handlers "github.com/nais/bifrost/pkg/api/http/v1/handlers"
 	unleashapp "github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
-	"github.com/nais/bifrost/pkg/handler"
 	"github.com/nais/bifrost/pkg/infrastructure/cloudsql"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	"github.com/nais/bifrost/pkg/unleash"
@@ -100,7 +100,7 @@ func setupRouter(config *config.Config, logger *logrus.Logger, unleashService un
 	gin.DefaultWriter = logger.Writer()
 
 	// v0 handlers (existing)
-	h := handler.NewHandler(config, logger, unleashService)
+	v0Handlers := v0handlers.NewHandler(config, logger, unleashService)
 
 	// v1 handlers (new)
 	v1Handlers := v1handlers.NewUnleashHandler(v1Service, config, logger)
@@ -110,18 +110,18 @@ func setupRouter(config *config.Config, logger *logrus.Logger, unleashService un
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Health check
-	router.GET("/healthz", h.HealthHandler)
+	router.GET("/healthz", v0Handlers.HealthHandler)
 
 	// v0 API routes (existing, unversioned for backward compatibility)
 	unleash := router.Group("/unleash")
 	{
-		unleash.POST("/new", h.UnleashInstancePost)
+		unleash.POST("/new", v0Handlers.UnleashInstancePost)
 
 		unleashInstance := unleash.Group("/:id")
-		unleashInstance.Use(h.UnleashInstanceMiddleware)
+		unleashInstance.Use(v0Handlers.UnleashInstanceMiddleware)
 		{
-			unleashInstance.POST("/edit", h.UnleashInstancePost)
-			unleashInstance.DELETE("", h.UnleashInstanceDelete)
+			unleashInstance.POST("/edit", v0Handlers.UnleashInstancePost)
+			unleashInstance.DELETE("", v0Handlers.UnleashInstanceDelete)
 		}
 	}
 

@@ -70,19 +70,19 @@ const docTemplate = `{
                     "200": {
                         "description": "Successfully created or updated",
                         "schema": {
-                            "$ref": "#/definitions/handler.UnleashResponse"
+                            "$ref": "#/definitions/handlers.UnleashResponse"
                         }
                     },
                     "400": {
                         "description": "Invalid request or validation error",
                         "schema": {
-                            "$ref": "#/definitions/handler.ErrorResponse"
+                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/handler.ErrorResponse"
+                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
                         }
                     }
                 }
@@ -114,13 +114,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Instance not found",
                         "schema": {
-                            "$ref": "#/definitions/handler.ErrorResponse"
+                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/handler.ErrorResponse"
+                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
                         }
                     }
                 }
@@ -154,19 +154,19 @@ const docTemplate = `{
                     "200": {
                         "description": "Successfully created or updated",
                         "schema": {
-                            "$ref": "#/definitions/handler.UnleashResponse"
+                            "$ref": "#/definitions/handlers.UnleashResponse"
                         }
                     },
                     "400": {
                         "description": "Invalid request or validation error",
                         "schema": {
-                            "$ref": "#/definitions/handler.ErrorResponse"
+                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/handler.ErrorResponse"
+                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
                         }
                     }
                 }
@@ -174,7 +174,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "handler.ErrorResponse": {
+        "github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse": {
             "type": "object",
             "properties": {
                 "details": {
@@ -185,7 +185,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handler.UnleashResponse": {
+        "handlers.UnleashResponse": {
             "type": "object",
             "properties": {
                 "apiVersion": {
