@@ -1,0 +1,13 @@
+linters-settings:
+  staticcheck:
+    checks:
+      - "all"
+      - "-SA1019" # Disable deprecation warnings - we intentionally use deprecated fields for backwards compatibility
+
+issues:
+  exclude-rules:
+    # Allow using deprecated fields in handlers (CustomVersion, AllowedNamespaces are deprecated but still supported)
+    - path: pkg/api/http/v1/handlers/unleash\.go
+      linters:
+        - staticcheck
+      text: "SA1019"

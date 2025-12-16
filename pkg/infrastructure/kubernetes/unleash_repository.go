@@ -77,6 +77,39 @@ func (r *UnleashRepository) List(ctx context.Context, excludeChannelInstances bo
 	return instances, nil
 }
 
+// ListCRDs returns all Unleash CRDs, optionally excluding those with release channels
+func (r *UnleashRepository) ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error) {
+	serverList := unleashv1.UnleashList{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "UnleashList",
+			APIVersion: "unleasherator.nais.io/v1",
+		},
+	}
+
+	opts := ctrl.ListOptions{
+		Namespace: r.config.Unleash.InstanceNamespace,
+	}
+
+	if err := r.kubeClient.List(ctx, &serverList, &opts); err != nil {
+		r.logger.WithContext(ctx).WithError(err).Error("Failed to list Unleash CRDs")
+		return nil, fmt.Errorf("failed to list unleash instances: %w", err)
+	}
+
+	if !excludeChannelInstances {
+		return serverList.Items, nil
+	}
+
+	// Filter out instances with release channels
+	result := make([]unleashv1.Unleash, 0, len(serverList.Items))
+	for i := range serverList.Items {
+		if serverList.Items[i].Spec.ReleaseChannel.Name == "" {
+			result = append(result, serverList.Items[i])
+		}
+	}
+
+	return result, nil
+}
+
 // Get retrieves a single Unleash instance by name
 func (r *UnleashRepository) Get(ctx context.Context, name string) (*unleash.Instance, error) {
 	serverInstance := &unleashv1.Unleash{

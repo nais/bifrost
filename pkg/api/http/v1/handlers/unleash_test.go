@@ -15,9 +15,11 @@ import (
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	domainUnleash "github.com/nais/bifrost/pkg/domain/unleash"
+	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // MockDatabaseManager implements the DatabaseManager interface for testing
@@ -120,6 +122,55 @@ func (m *MockUnleashRepository) Delete(ctx context.Context, name string) error {
 	}
 	delete(m.instances, name)
 	return nil
+}
+
+func (m *MockUnleashRepository) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, error) {
+	instance, ok := m.instances[name]
+	if !ok {
+		return nil, errors.New("instance not found")
+	}
+	return &unleashv1.Unleash{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              instance.Name,
+			Namespace:         instance.Namespace,
+			CreationTimestamp: metav1.NewTime(instance.CreatedAt),
+		},
+		Spec: unleashv1.UnleashSpec{
+			CustomImage: instance.CustomVersion,
+			ReleaseChannel: unleashv1.UnleashReleaseChannelConfig{
+				Name: instance.ReleaseChannelName,
+			},
+		},
+		Status: unleashv1.UnleashStatus{
+			Version: instance.Version,
+		},
+	}, nil
+}
+
+func (m *MockUnleashRepository) ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error) {
+	var result []unleashv1.Unleash
+	for _, instance := range m.instances {
+		if excludeChannelInstances && instance.ReleaseChannelName != "" {
+			continue
+		}
+		result = append(result, unleashv1.Unleash{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              instance.Name,
+				Namespace:         instance.Namespace,
+				CreationTimestamp: metav1.NewTime(instance.CreatedAt),
+			},
+			Spec: unleashv1.UnleashSpec{
+				CustomImage: instance.CustomVersion,
+				ReleaseChannel: unleashv1.UnleashReleaseChannelConfig{
+					Name: instance.ReleaseChannelName,
+				},
+			},
+			Status: unleashv1.UnleashStatus{
+				Version: instance.Version,
+			},
+		})
+	}
+	return result, nil
 }
 
 // setupUnleashTestHandler creates a test handler with default configuration.

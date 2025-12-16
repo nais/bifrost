@@ -7,13 +7,14 @@ import (
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // IService defines the interface for unleash instance management operations
 type IService interface {
 	List(ctx context.Context, excludeChannelInstances bool) ([]*unleash.Instance, error)
+	ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error)
 	Get(ctx context.Context, name string) (*unleash.Instance, error)
+	GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, error)
 	Create(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error)
 	Update(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error)
 	Delete(ctx context.Context, name string) error
@@ -52,9 +53,19 @@ func (s *Service) List(ctx context.Context, excludeChannelInstances bool) ([]*un
 	return s.repository.List(ctx, excludeChannelInstances)
 }
 
+// ListCRDs returns all unleash CRDs, optionally excluding those with release channels
+func (s *Service) ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error) {
+	return s.repository.ListCRDs(ctx, excludeChannelInstances)
+}
+
 // Get retrieves a single unleash instance by name
 func (s *Service) Get(ctx context.Context, name string) (*unleash.Instance, error) {
 	return s.repository.Get(ctx, name)
+}
+
+// GetCRD retrieves a single unleash CRD by name
+func (s *Service) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, error) {
+	return s.repository.GetCRD(ctx, name)
 }
 
 // Create creates a new unleash instance with its database and resources
@@ -159,55 +170,5 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 
 // getCRD is a helper to retrieve the Kubernetes CRD for an instance
 func (s *Service) getCRD(ctx context.Context, name string) (*unleashv1.Unleash, error) {
-	// Get the instance to access the underlying CRD
-	instance, err := s.repository.Get(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-
-	// Return a basic CRD structure from instance data
-	// Note: This is primarily for API responses and may not have all CRD details
-	crd := &unleashv1.Unleash{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              instance.Name,
-			Namespace:         instance.Namespace,
-			CreationTimestamp: metav1.NewTime(instance.CreatedAt),
-		},
-		Status: unleashv1.UnleashStatus{
-			Version: instance.Version,
-		},
-		Spec: unleashv1.UnleashSpec{
-			ApiIngress: unleashv1.UnleashIngressConfig{
-				Host: extractHost(instance.APIUrl),
-			},
-			WebIngress: unleashv1.UnleashIngressConfig{
-				Host: extractHost(instance.WebUrl),
-			},
-		},
-	}
-
-	if instance.CustomVersion != "" {
-		crd.Spec.CustomImage = instance.CustomVersion
-	}
-	if instance.ReleaseChannelName != "" {
-		crd.Spec.ReleaseChannel.Name = instance.ReleaseChannelName
-	}
-
-	return crd, nil
-}
-
-// extractHost extracts the hostname from a URL
-func extractHost(urlStr string) string {
-	if len(urlStr) > 8 && urlStr[:8] == "https://" {
-		urlStr = urlStr[8:]
-	}
-	if len(urlStr) > 7 && urlStr[:7] == "http://" {
-		urlStr = urlStr[7:]
-	}
-	for i, c := range urlStr {
-		if c == '/' {
-			return urlStr[:i]
-		}
-	}
-	return urlStr
+	return s.repository.GetCRD(ctx, name)
 }
