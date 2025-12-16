@@ -31,6 +31,15 @@ type ReleaseChannelResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+// ListChannels godoc
+//
+//	@Summary		List all release channels
+//	@Description	Returns a list of all available release channels for Unleash version management
+//	@Tags			release-channels
+//	@Produce		json
+//	@Success		200	{array}		ReleaseChannelResponse
+//	@Failure		500	{object}	ErrorResponse	"Internal server error"
+//	@Router			/v1/releasechannels [get]
 func (h *ReleaseChannelHandler) ListChannels(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -53,6 +62,16 @@ func (h *ReleaseChannelHandler) ListChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// GetChannel godoc
+//
+//	@Summary		Get a release channel by name
+//	@Description	Returns details of a specific release channel
+//	@Tags			release-channels
+//	@Produce		json
+//	@Param			name	path		string	true	"Release channel name"
+//	@Success		200		{object}	ReleaseChannelResponse
+//	@Failure		404		{object}	ErrorResponse	"Release channel not found"
+//	@Router			/v1/releasechannels/{name} [get]
 func (h *ReleaseChannelHandler) GetChannel(c *gin.Context) {
 	ctx := c.Request.Context()
 	name := c.Param("name")

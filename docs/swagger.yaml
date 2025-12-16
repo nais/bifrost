@@ -1,13 +1,57 @@
 basePath: /
 definitions:
-  github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse:
+  dto.UnleashConfigRequest:
     properties:
-      details:
+      allowed_clusters:
         type: string
-      error:
+      allowed_teams:
+        type: string
+      database_pool_idle_timeout_ms:
+        type: integer
+      database_pool_max:
+        type: integer
+      enable_federation:
+        type: boolean
+      log_level:
+        type: string
+      name:
+        type: string
+      release_channel_name:
         type: string
     type: object
-  handlers.UnleashResponse:
+  handlers.ErrorResponse:
+    properties:
+      details:
+        additionalProperties:
+          type: string
+        type: object
+      error:
+        type: string
+      message:
+        type: string
+      status_code:
+        type: integer
+    type: object
+  handlers.ReleaseChannelResponse:
+    properties:
+      created_at:
+        type: string
+      current_version:
+        type: string
+      description:
+        type: string
+      last_updated:
+        type: string
+      name:
+        type: string
+      schedule:
+        type: string
+      type:
+        type: string
+      version:
+        type: string
+    type: object
+  handlers.Unleash:
     properties:
       apiVersion:
         description: |-
@@ -104,41 +148,6 @@ definitions:
         - DecimalExponent
         - BinarySI
         - DecimalSI
-    type: object
-  unleash.UnleashConfig:
-    properties:
-      allowed-clusters:
-        type: string
-      allowed-namespaces:
-        type: string
-      allowed-teams:
-        type: string
-      custom-version:
-        type: string
-      database-pool-idle-timeout-ms:
-        type: integer
-      database-pool-max:
-        maximum: 10
-        minimum: 1
-        type: integer
-      enable-federation:
-        type: boolean
-      log-level:
-        enum:
-        - debug
-        - info
-        - warn
-        - error
-        - fatal
-        - panic
-        type: string
-      name:
-        type: string
-    required:
-    - database-pool-idle-timeout-ms
-    - database-pool-max
-    - log-level
-    - name
     type: object
   unleash_nais_io_v1.UnleashDatabaseConfig:
     properties:
@@ -4357,102 +4366,182 @@ info:
   title: Bifrost API
   version: "1.0"
 paths:
-  /healthz:
+  /v1/releasechannels:
     get:
-      description: Check if the service is healthy
+      description: Returns a list of all available release channels for Unleash version
+        management
       produces:
-      - text/plain
+      - application/json
       responses:
         "200":
           description: OK
           schema:
-            type: string
-      summary: Health check
+            items:
+              $ref: '#/definitions/handlers.ReleaseChannelResponse'
+            type: array
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List all release channels
       tags:
-      - health
-  /unleash/{id}:
-    delete:
-      description: Delete an existing Unleash instance by name
+      - release-channels
+  /v1/releasechannels/{name}:
+    get:
+      description: Returns details of a specific release channel
       parameters:
-      - description: Instance name
+      - description: Release channel name
         in: path
-        name: id
+        name: name
         required: true
         type: string
       produces:
       - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ReleaseChannelResponse'
+        "404":
+          description: Release channel not found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get a release channel by name
+      tags:
+      - release-channels
+  /v1/unleash:
+    get:
+      description: Returns a list of all Unleash feature flag server instances as
+        Kubernetes CRDs
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.Unleash'
+            type: array
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List all Unleash instances
+      tags:
+      - unleash-v1
+    post:
+      consumes:
+      - application/json
+      description: Creates a new Unleash feature flag server instance with database
+        and credentials. Returns the Kubernetes CRD.
+      parameters:
+      - description: Unleash instance configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.UnleashConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.Unleash'
+        "400":
+          description: Invalid request or validation error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create a new Unleash instance
+      tags:
+      - unleash-v1
+  /v1/unleash/{name}:
+    delete:
+      description: Deletes an existing Unleash instance and its associated database
+        and credentials
+      parameters:
+      - description: Instance name
+        in: path
+        name: name
+        required: true
+        type: string
       responses:
         "204":
           description: Successfully deleted
         "404":
           description: Instance not found
           schema:
-            $ref: '#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse'
+            $ref: '#/definitions/handlers.ErrorResponse'
         "500":
           description: Internal server error
           schema:
-            $ref: '#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse'
-      summary: Delete Unleash instance
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Delete an Unleash instance
       tags:
-      - unleash
-  /unleash/{id}/edit:
-    post:
-      consumes:
-      - application/json
-      description: Create a new Unleash instance or update an existing one
+      - unleash-v1
+    get:
+      description: Returns details of a specific Unleash instance as Kubernetes CRD
       parameters:
-      - description: Unleash configuration
-        in: body
-        name: request
+      - description: Instance name
+        in: path
+        name: name
         required: true
-        schema:
-          $ref: '#/definitions/unleash.UnleashConfig'
+        type: string
       produces:
       - application/json
       responses:
         "200":
-          description: Successfully created or updated
+          description: OK
           schema:
-            $ref: '#/definitions/handlers.UnleashResponse'
-        "400":
-          description: Invalid request or validation error
+            $ref: '#/definitions/handlers.Unleash'
+        "404":
+          description: Instance not found
           schema:
-            $ref: '#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse'
-        "500":
-          description: Internal server error
-          schema:
-            $ref: '#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse'
-      summary: Create or update Unleash instance
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get Unleash instance by name
       tags:
-      - unleash
-  /unleash/new:
-    post:
+      - unleash-v1
+    put:
       consumes:
       - application/json
-      description: Create a new Unleash instance or update an existing one
+      description: Updates configuration of an existing Unleash instance. Preserves
+        federation settings if not specified. Returns the Kubernetes CRD.
       parameters:
-      - description: Unleash configuration
+      - description: Instance name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Updated Unleash configuration
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/unleash.UnleashConfig'
+          $ref: '#/definitions/dto.UnleashConfigRequest'
       produces:
       - application/json
       responses:
         "200":
-          description: Successfully created or updated
+          description: OK
           schema:
-            $ref: '#/definitions/handlers.UnleashResponse'
+            $ref: '#/definitions/handlers.Unleash'
         "400":
           description: Invalid request or validation error
           schema:
-            $ref: '#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse'
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Instance not found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
         "500":
           description: Internal server error
           schema:
-            $ref: '#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse'
-      summary: Create or update Unleash instance
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Update an existing Unleash instance
       tags:
-      - unleash
+      - unleash-v1
 swagger: "2.0"

@@ -16,29 +16,100 @@
     "host": "localhost:8080",
     "basePath": "/",
     "paths": {
-        "/healthz": {
+        "/v1/releasechannels": {
             "get": {
-                "description": "Check if the service is healthy",
+                "description": "Returns a list of all available release channels for Unleash version management",
                 "produces": [
-                    "text/plain"
+                    "application/json"
                 ],
                 "tags": [
-                    "health"
+                    "release-channels"
                 ],
-                "summary": "Health check",
+                "summary": "List all release channels",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/handlers.ReleaseChannelResponse"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     }
                 }
             }
         },
-        "/unleash/new": {
+        "/v1/releasechannels/{name}": {
+            "get": {
+                "description": "Returns details of a specific release channel",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "release-channels"
+                ],
+                "summary": "Get a release channel by name",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Release channel name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ReleaseChannelResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Release channel not found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/unleash": {
+            "get": {
+                "description": "Returns a list of all Unleash feature flag server instances as Kubernetes CRDs",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "unleash-v1"
+                ],
+                "summary": "List all Unleash instances",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/handlers.Unleash"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
             "post": {
-                "description": "Create a new Unleash instance or update an existing one",
+                "description": "Creates a new Unleash feature flag server instance with database and credentials. Returns the Kubernetes CRD.",
                 "consumes": [
                     "application/json"
                 ],
@@ -46,57 +117,144 @@
                     "application/json"
                 ],
                 "tags": [
-                    "unleash"
+                    "unleash-v1"
                 ],
-                "summary": "Create or update Unleash instance",
+                "summary": "Create a new Unleash instance",
                 "parameters": [
                     {
-                        "description": "Unleash configuration",
+                        "description": "Unleash instance configuration",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/unleash.UnleashConfig"
+                            "$ref": "#/definitions/dto.UnleashConfigRequest"
                         }
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "Successfully created or updated",
+                    "201": {
+                        "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/handlers.UnleashResponse"
+                            "$ref": "#/definitions/handlers.Unleash"
                         }
                     },
                     "400": {
                         "description": "Invalid request or validation error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
+                            "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
+                            "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     }
                 }
             }
         },
-        "/unleash/{id}": {
-            "delete": {
-                "description": "Delete an existing Unleash instance by name",
+        "/v1/unleash/{name}": {
+            "get": {
+                "description": "Returns details of a specific Unleash instance as Kubernetes CRD",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "unleash"
+                    "unleash-v1"
                 ],
-                "summary": "Delete Unleash instance",
+                "summary": "Get Unleash instance by name",
                 "parameters": [
                     {
                         "type": "string",
                         "description": "Instance name",
-                        "name": "id",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.Unleash"
+                        }
+                    },
+                    "404": {
+                        "description": "Instance not found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Updates configuration of an existing Unleash instance. Preserves federation settings if not specified. Returns the Kubernetes CRD.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "unleash-v1"
+                ],
+                "summary": "Update an existing Unleash instance",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Updated Unleash configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.UnleashConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.Unleash"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request or validation error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Instance not found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Deletes an existing Unleash instance and its associated database and credentials",
+                "tags": [
+                    "unleash-v1"
+                ],
+                "summary": "Delete an Unleash instance",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance name",
+                        "name": "name",
                         "in": "path",
                         "required": true
                     }
@@ -108,59 +266,13 @@
                     "404": {
                         "description": "Instance not found",
                         "schema": {
-                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
+                            "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/unleash/{id}/edit": {
-            "post": {
-                "description": "Create a new Unleash instance or update an existing one",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "unleash"
-                ],
-                "summary": "Create or update Unleash instance",
-                "parameters": [
-                    {
-                        "description": "Unleash configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/unleash.UnleashConfig"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Successfully created or updated",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.UnleashResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid request or validation error",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal server error",
-                        "schema": {
-                            "$ref": "#/definitions/github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse"
+                            "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     }
                 }
@@ -168,18 +280,85 @@
         }
     },
     "definitions": {
-        "github_com_nais_bifrost_pkg_api_http_v0_handlers.ErrorResponse": {
+        "dto.UnleashConfigRequest": {
             "type": "object",
             "properties": {
-                "details": {
+                "allowed_clusters": {
                     "type": "string"
                 },
-                "error": {
+                "allowed_teams": {
+                    "type": "string"
+                },
+                "database_pool_idle_timeout_ms": {
+                    "type": "integer"
+                },
+                "database_pool_max": {
+                    "type": "integer"
+                },
+                "enable_federation": {
+                    "type": "boolean"
+                },
+                "log_level": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "release_channel_name": {
                     "type": "string"
                 }
             }
         },
-        "handlers.UnleashResponse": {
+        "handlers.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "status_code": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ReleaseChannelResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "current_version": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "last_updated": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "schedule": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.Unleash": {
             "type": "object",
             "properties": {
                 "apiVersion": {
@@ -286,54 +465,6 @@
                         "BinarySI",
                         "DecimalSI"
                     ]
-                }
-            }
-        },
-        "unleash.UnleashConfig": {
-            "type": "object",
-            "required": [
-                "database-pool-idle-timeout-ms",
-                "database-pool-max",
-                "log-level",
-                "name"
-            ],
-            "properties": {
-                "allowed-clusters": {
-                    "type": "string"
-                },
-                "allowed-namespaces": {
-                    "type": "string"
-                },
-                "allowed-teams": {
-                    "type": "string"
-                },
-                "custom-version": {
-                    "type": "string"
-                },
-                "database-pool-idle-timeout-ms": {
-                    "type": "integer"
-                },
-                "database-pool-max": {
-                    "type": "integer",
-                    "maximum": 10,
-                    "minimum": 1
-                },
-                "enable-federation": {
-                    "type": "boolean"
-                },
-                "log-level": {
-                    "type": "string",
-                    "enum": [
-                        "debug",
-                        "info",
-                        "warn",
-                        "error",
-                        "fatal",
-                        "panic"
-                    ]
-                },
-                "name": {
-                    "type": "string"
                 }
             }
         },

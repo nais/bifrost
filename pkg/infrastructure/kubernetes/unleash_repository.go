@@ -59,7 +59,7 @@ func (r *UnleashRepository) List(ctx context.Context, excludeChannelInstances bo
 	for i := range serverList.Items {
 		instance := r.crdToInstance(&serverList.Items[i])
 
-		// Filter channel instances if requested (for v0 API)
+		// Filter channel instances if requested
 		if excludeChannelInstances && instance.HasReleaseChannel() {
 			continue
 		}
@@ -75,6 +75,39 @@ func (r *UnleashRepository) List(ctx context.Context, excludeChannelInstances bo
 	}).Debug("Listed Unleash instances")
 
 	return instances, nil
+}
+
+// ListCRDs returns all Unleash CRDs, optionally excluding those with release channels
+func (r *UnleashRepository) ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error) {
+	serverList := unleashv1.UnleashList{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "UnleashList",
+			APIVersion: "unleasherator.nais.io/v1",
+		},
+	}
+
+	opts := ctrl.ListOptions{
+		Namespace: r.config.Unleash.InstanceNamespace,
+	}
+
+	if err := r.kubeClient.List(ctx, &serverList, &opts); err != nil {
+		r.logger.WithContext(ctx).WithError(err).Error("Failed to list Unleash CRDs")
+		return nil, fmt.Errorf("failed to list unleash instances: %w", err)
+	}
+
+	if !excludeChannelInstances {
+		return serverList.Items, nil
+	}
+
+	// Filter out instances with release channels
+	result := make([]unleashv1.Unleash, 0, len(serverList.Items))
+	for i := range serverList.Items {
+		if serverList.Items[i].Spec.ReleaseChannel.Name == "" {
+			result = append(result, serverList.Items[i])
+		}
+	}
+
+	return result, nil
 }
 
 // Get retrieves a single Unleash instance by name
@@ -235,6 +268,13 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 		IsReady:   crd.IsReady(),
 		APIUrl:    fmt.Sprintf("https://%s/api/", crd.Spec.ApiIngress.Host),
 		WebUrl:    fmt.Sprintf("https://%s/", crd.Spec.WebIngress.Host),
+
+		// Federation configuration
+		EnableFederation:  crd.Spec.Federation.Enabled,
+		FederationNonce:   crd.Spec.Federation.SecretNonce,
+		AllowedTeams:      getEnvVar(crd, "TEAMS_ALLOWED_TEAMS", ""),
+		AllowedNamespaces: utils.JoinNoEmpty(crd.Spec.Federation.Namespaces, ","),
+		AllowedClusters:   utils.JoinNoEmpty(crd.Spec.Federation.Clusters, ","),
 	}
 
 	// Extract version source

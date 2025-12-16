@@ -7,14 +7,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	v0handlers "github.com/nais/bifrost/pkg/api/http/v0/handlers"
 	v1handlers "github.com/nais/bifrost/pkg/api/http/v1/handlers"
 	unleashapp "github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	"github.com/nais/bifrost/pkg/infrastructure/cloudsql"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
-	"github.com/nais/bifrost/pkg/unleash"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
@@ -96,14 +94,11 @@ func apiVersionMiddleware(version string) gin.HandlerFunc {
 	}
 }
 
-func setupRouter(config *config.Config, logger *logrus.Logger, unleashService unleash.IUnleashService, v1Service *unleashapp.Service, releaseChannelRepo releasechannel.Repository) *gin.Engine {
+func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleashapp.Service, releaseChannelRepo releasechannel.Repository) *gin.Engine {
 	router := gin.Default()
 	gin.DefaultWriter = logger.Writer()
 
-	// v0 handlers (existing)
-	v0Handlers := v0handlers.NewHandler(config, logger, unleashService)
-
-	// v1 handlers (new)
+	// v1 handlers
 	v1Handlers := v1handlers.NewUnleashHandler(v1Service, config, logger, releaseChannelRepo)
 	v1ChannelHandlers := v1handlers.NewReleaseChannelHandler(releaseChannelRepo, logger)
 
@@ -111,22 +106,11 @@ func setupRouter(config *config.Config, logger *logrus.Logger, unleashService un
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Health check
-	router.GET("/healthz", v0Handlers.HealthHandler)
+	router.GET("/healthz", func(c *gin.Context) {
+		c.String(200, "OK")
+	})
 
-	// v0 API routes (existing, unversioned for backward compatibility)
-	unleash := router.Group("/unleash")
-	{
-		unleash.POST("/new", v0Handlers.UnleashInstancePost)
-
-		unleashInstance := unleash.Group("/:id")
-		unleashInstance.Use(v0Handlers.UnleashInstanceMiddleware)
-		{
-			unleashInstance.POST("/edit", v0Handlers.UnleashInstancePost)
-			unleashInstance.DELETE("", v0Handlers.UnleashInstanceDelete)
-		}
-	}
-
-	// v1 API routes (new, versioned)
+	// v1 API routes
 	v1 := router.Group("/v1")
 	v1.Use(apiVersionMiddleware("v1"))
 	{
@@ -176,13 +160,10 @@ func Run(config *config.Config) {
 		logger.Fatal(err)
 	}
 
-	// Create v0 adapter for backward compatibility
-	unleashServiceV0 := unleash.NewServiceAdapter(sqlDatabasesClient, sqlUsersClient, kubeClient, config, logger)
-
-	// Create v1 service directly (no adapter)
+	// Create v1 service
 	dbManager := cloudsql.NewManager(sqlDatabasesClient, sqlUsersClient, kubeClient, config, logger)
 	repo := kubernetes.NewUnleashRepository(kubeClient, config, logger)
-	unleashServiceV1 := unleashapp.NewService(repo, dbManager, config, logger)
+	unleashService := unleashapp.NewService(repo, dbManager, config, logger)
 
 	// Create release channel repository
 	releaseChannelRepo := kubernetes.NewReleaseChannelRepository(kubeClient, config.Unleash.InstanceNamespace)
@@ -194,7 +175,7 @@ func Run(config *config.Config) {
 		logger.Fatal(err)
 	}
 
-	router := setupRouter(config, logger, unleashServiceV0, unleashServiceV1, releaseChannelRepo)
+	router := setupRouter(config, logger, unleashService, releaseChannelRepo)
 
 	logger.Infof("Listening on %s", config.GetServerAddr())
 	if err := router.Run(config.GetServerAddr()); err != nil {

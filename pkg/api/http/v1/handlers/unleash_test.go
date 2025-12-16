@@ -15,9 +15,11 @@ import (
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	domainUnleash "github.com/nais/bifrost/pkg/domain/unleash"
+	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // MockDatabaseManager implements the DatabaseManager interface for testing
@@ -84,6 +86,11 @@ func (m *MockUnleashRepository) Create(ctx context.Context, config *domainUnleas
 		CustomVersion:      config.CustomVersion,
 		Version:            "5.10.0",
 		CreatedAt:          time.Now(),
+		EnableFederation:   config.EnableFederation,
+		FederationNonce:    config.FederationNonce,
+		AllowedTeams:       config.AllowedTeams,
+		AllowedNamespaces:  config.AllowedNamespaces,
+		AllowedClusters:    config.AllowedClusters,
 	}
 	return nil
 }
@@ -100,6 +107,11 @@ func (m *MockUnleashRepository) Update(ctx context.Context, config *domainUnleas
 		CustomVersion:      config.CustomVersion,
 		Version:            existing.Version,
 		CreatedAt:          existing.CreatedAt,
+		EnableFederation:   config.EnableFederation,
+		FederationNonce:    config.FederationNonce,
+		AllowedTeams:       config.AllowedTeams,
+		AllowedNamespaces:  config.AllowedNamespaces,
+		AllowedClusters:    config.AllowedClusters,
 	}
 	return nil
 }
@@ -110,6 +122,55 @@ func (m *MockUnleashRepository) Delete(ctx context.Context, name string) error {
 	}
 	delete(m.instances, name)
 	return nil
+}
+
+func (m *MockUnleashRepository) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, error) {
+	instance, ok := m.instances[name]
+	if !ok {
+		return nil, errors.New("instance not found")
+	}
+	return &unleashv1.Unleash{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              instance.Name,
+			Namespace:         instance.Namespace,
+			CreationTimestamp: metav1.NewTime(instance.CreatedAt),
+		},
+		Spec: unleashv1.UnleashSpec{
+			CustomImage: instance.CustomVersion,
+			ReleaseChannel: unleashv1.UnleashReleaseChannelConfig{
+				Name: instance.ReleaseChannelName,
+			},
+		},
+		Status: unleashv1.UnleashStatus{
+			Version: instance.Version,
+		},
+	}, nil
+}
+
+func (m *MockUnleashRepository) ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error) {
+	var result []unleashv1.Unleash
+	for _, instance := range m.instances {
+		if excludeChannelInstances && instance.ReleaseChannelName != "" {
+			continue
+		}
+		result = append(result, unleashv1.Unleash{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              instance.Name,
+				Namespace:         instance.Namespace,
+				CreationTimestamp: metav1.NewTime(instance.CreatedAt),
+			},
+			Spec: unleashv1.UnleashSpec{
+				CustomImage: instance.CustomVersion,
+				ReleaseChannel: unleashv1.UnleashReleaseChannelConfig{
+					Name: instance.ReleaseChannelName,
+				},
+			},
+			Status: unleashv1.UnleashStatus{
+				Version: instance.Version,
+			},
+		})
+	}
+	return result, nil
 }
 
 // setupUnleashTestHandler creates a test handler with default configuration.
@@ -228,9 +289,9 @@ func TestUpdateInstance_ReleaseChannelDowngradeProtection(t *testing.T) {
 			router.PUT("/unleash/:name", handler.UpdateInstance)
 
 			requestBody := map[string]interface{}{
-				"release-channel-name": tt.newChannel,
-				"log-level":            "info",
-				"database-pool-max":    5,
+				"release_channel_name": tt.newChannel,
+				"log_level":            "info",
+				"database_pool_max":    5,
 			}
 			body, _ := json.Marshal(requestBody)
 
@@ -279,9 +340,9 @@ func TestUpdateInstance_NewChannelAssignment(t *testing.T) {
 	router.PUT("/unleash/:name", handler.UpdateInstance)
 
 	requestBody := map[string]interface{}{
-		"release-channel-name": "stable",
-		"log-level":            "info",
-		"database-pool-max":    5,
+		"release_channel_name": "stable",
+		"log_level":            "info",
+		"database_pool_max":    5,
 	}
 	body, _ := json.Marshal(requestBody)
 
@@ -314,9 +375,9 @@ func TestUpdateInstance_ChannelNotFound(t *testing.T) {
 	router.PUT("/unleash/:name", handler.UpdateInstance)
 
 	requestBody := map[string]interface{}{
-		"release-channel-name": "nonexistent",
-		"log-level":            "info",
-		"database-pool-max":    5,
+		"release_channel_name": "nonexistent",
+		"log_level":            "info",
+		"database_pool_max":    5,
 	}
 	body, _ := json.Marshal(requestBody)
 
@@ -382,8 +443,8 @@ func TestUpdateInstance_PreservesVersionSourceWhenNotSpecified(t *testing.T) {
 
 			// Update without specifying version source - only change log level
 			requestBody := map[string]interface{}{
-				"log-level":         "debug",
-				"database-pool-max": 5,
+				"log_level":         "debug",
+				"database_pool_max": 5,
 			}
 			body, _ := json.Marshal(requestBody)
 
@@ -470,16 +531,16 @@ func TestCreateInstance_DefaultReleaseChannel(t *testing.T) {
 
 			requestBody := map[string]interface{}{
 				"name":              "test-instance",
-				"log-level":         "info",
-				"database-pool-max": 5,
+				"log_level":         "info",
+				"database_pool_max": 5,
 			}
 
 			if tt.requestCustomVersion != "" {
-				requestBody["custom-version"] = tt.requestCustomVersion
+				requestBody["custom_version"] = tt.requestCustomVersion
 			}
 
 			if tt.requestReleaseChannel != "" {
-				requestBody["release-channel-name"] = tt.requestReleaseChannel
+				requestBody["release_channel_name"] = tt.requestReleaseChannel
 			}
 
 			body, _ := json.Marshal(requestBody)
@@ -525,9 +586,9 @@ func TestCreateInstance_ExplicitVersionsNotAffectedByDefault(t *testing.T) {
 	t.Run("custom version is respected", func(t *testing.T) {
 		requestBody := map[string]interface{}{
 			"name":              "custom-version-instance",
-			"custom-version":    "4.20.0",
-			"log-level":         "info",
-			"database-pool-max": 5,
+			"custom_version":    "4.20.0",
+			"log_level":         "info",
+			"database_pool_max": 5,
 		}
 		body, _ := json.Marshal(requestBody)
 
@@ -545,9 +606,9 @@ func TestCreateInstance_ExplicitVersionsNotAffectedByDefault(t *testing.T) {
 	t.Run("explicit release channel is respected", func(t *testing.T) {
 		requestBody := map[string]interface{}{
 			"name":                 "explicit-channel-instance",
-			"release-channel-name": "rapid",
-			"log-level":            "info",
-			"database-pool-max":    5,
+			"release_channel_name": "rapid",
+			"log_level":            "info",
+			"database_pool_max":    5,
 		}
 		body, _ := json.Marshal(requestBody)
 
@@ -580,8 +641,8 @@ func TestCreateInstance_NoVersionSourceRejected(t *testing.T) {
 
 	requestBody := map[string]interface{}{
 		"name":              "no-version-instance",
-		"log-level":         "info",
-		"database-pool-max": 5,
+		"log_level":         "info",
+		"database_pool_max": 5,
 		// No custom-version and no release-channel-name
 	}
 	body, _ := json.Marshal(requestBody)
@@ -670,8 +731,8 @@ func TestUpdateInstance_OptionalFieldsPreserveExisting(t *testing.T) {
 
 	// Update with minimal fields - no log-level, no database-pool-max
 	requestBody := map[string]interface{}{
-		"enable-federation": true,
-		"allowed-teams":     "team1,team2",
+		"enable_federation": true,
+		"allowed_teams":     "team1,team2",
 	}
 	body, _ := json.Marshal(requestBody)
 
@@ -682,4 +743,96 @@ func TestUpdateInstance_OptionalFieldsPreserveExisting(t *testing.T) {
 
 	// Should succeed - defaults are applied for missing fields
 	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+}
+
+func TestCreateInstance_FederationEnabledByDefault(t *testing.T) {
+	// New instances should have federation enabled by default (new instances default)
+	repo := NewMockUnleashRepository()
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{
+				Name:    name,
+				Version: "5.10.0",
+			}, nil
+		},
+	}
+
+	cfg := &config.Config{
+		Unleash: config.UnleashConfig{
+			DefaultReleaseChannel: "stable",
+		},
+	}
+
+	handler, router := setupUnleashTestHandlerWithConfig(repo, channelRepo, cfg)
+	router.POST("/unleash", handler.CreateInstance)
+
+	// Request without explicit enable-federation
+	requestBody := map[string]interface{}{
+		"name":          "new-instance",
+		"allowed_teams": "myteam",
+	}
+	body, _ := json.Marshal(requestBody)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code, "Response: %s", w.Body.String())
+
+	created := repo.instances["new-instance"]
+	require.NotNil(t, created, "instance should be created")
+	assert.True(t, created.EnableFederation, "federation should be enabled by default")
+	assert.Equal(t, "myteam", created.AllowedTeams, "allowed teams should be set")
+}
+
+func TestUpdateInstance_PreservesFederationSettings(t *testing.T) {
+	// When updating an instance, federation settings should be preserved if not specified
+	repo := NewMockUnleashRepository()
+	repo.instances["fed-instance"] = &domainUnleash.Instance{
+		Name:               "fed-instance",
+		Namespace:          "default",
+		ReleaseChannelName: "stable",
+		Version:            "5.10.0",
+		CreatedAt:          time.Now(),
+		EnableFederation:   true,
+		FederationNonce:    "abc12345",
+		AllowedTeams:       "team-a,team-b",
+		AllowedNamespaces:  "team-a,team-b",
+		AllowedClusters:    "dev-gcp,prod-gcp",
+	}
+
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{
+				Name:    name,
+				Version: "5.10.0",
+			}, nil
+		},
+	}
+
+	handler, router := setupUnleashTestHandler(repo, channelRepo)
+	router.PUT("/unleash/:name", handler.UpdateInstance)
+
+	// Update with only allowed-teams - should preserve nonce and other federation settings
+	requestBody := map[string]interface{}{
+		"allowed_teams": "team-a,team-b,team-c",
+	}
+	body, _ := json.Marshal(requestBody)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("PUT", "/unleash/fed-instance", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+	updated := repo.instances["fed-instance"]
+	require.NotNil(t, updated, "instance should exist")
+	assert.True(t, updated.EnableFederation, "federation should remain enabled")
+	assert.Equal(t, "abc12345", updated.FederationNonce, "federation nonce should be preserved")
+	assert.Equal(t, "team-a,team-b,team-c", updated.AllowedTeams, "allowed teams should be updated")
+	// Note: MergeTeamsAndNamespaces merges teams and namespaces into both fields
+	assert.Equal(t, "team-a,team-b,team-c", updated.AllowedNamespaces, "allowed namespaces are merged with teams")
+	assert.Equal(t, "dev-gcp,prod-gcp", updated.AllowedClusters, "allowed clusters should be preserved")
 }
