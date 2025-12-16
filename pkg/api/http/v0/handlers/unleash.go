@@ -1,4 +1,4 @@
-package handler
+package handlers
 
 import (
 	"errors"
@@ -118,8 +118,14 @@ func (h *Handler) UnleashInstancePost(c *gin.Context) {
 	}
 
 	if exists {
-		uc.Name = instance.(*unleash.UnleashInstance).ServerInstance.GetName()
-		uc.FederationNonce = instance.(*unleash.UnleashInstance).ServerInstance.Spec.Federation.SecretNonce
+		existingInstance := instance.(*unleash.UnleashInstance)
+		uc.Name = existingInstance.ServerInstance.GetName()
+		uc.FederationNonce = existingInstance.ServerInstance.Spec.Federation.SecretNonce
+		// Preserve existing custom version if not provided in request
+		if uc.CustomVersion == "" {
+			existingConfig := unleash.UnleashVariables(existingInstance.ServerInstance, false)
+			uc.CustomVersion = existingConfig.CustomVersion
+		}
 	} else {
 		uc.FederationNonce = utils.RandomString(8)
 		uc.SetDefaultValues(unleashVersions)
