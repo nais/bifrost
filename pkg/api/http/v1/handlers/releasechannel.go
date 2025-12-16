@@ -26,7 +26,7 @@ type ReleaseChannelResponse struct {
 	Image     string `json:"image"`
 	CreatedAt string `json:"created_at"`
 
-	// Current version extracted from the image tag
+	// CurrentVersion is the current version tracked by the release channel status
 	CurrentVersion string `json:"current_version"`
 
 	// Legacy fields - kept for backwards compatibility

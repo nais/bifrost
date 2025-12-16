@@ -342,7 +342,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "current_version": {
-                    "description": "Current version extracted from the image tag",
+                    "description": "CurrentVersion is the current version tracked by the release channel status",
                     "type": "string"
                 },
                 "description": {

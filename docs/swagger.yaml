@@ -37,7 +37,8 @@ definitions:
       created_at:
         type: string
       current_version:
-        description: Current version extracted from the image tag
+        description: CurrentVersion is the current version tracked by the release
+          channel status
         type: string
       description:
         description: 'Deprecated: This field is reserved for future use and always
