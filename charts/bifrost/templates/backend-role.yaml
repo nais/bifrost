@@ -35,6 +35,14 @@ rules:
     verbs:
       - "*"
   - apiGroups:
+      - unleash.nais.io
+    resources:
+      - releasechannels
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
       - networking.gke.io
     resources:
       - fqdnnetworkpolicies
