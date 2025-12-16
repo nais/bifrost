@@ -36,7 +36,8 @@ backend:
     # webOAuthJWTAudience: # mapped in fasit
 
     # Default release channel for new instances (optional)
-    defaultReleaseChannel: "stable"
+    # Set via Fasit per environment once ReleaseChannel CRDs are available
+    defaultReleaseChannel: ""
 
     # Unleash teams config
     teamsApiUrl: https://console.nav.cloud.nais.io/graphql
