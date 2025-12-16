@@ -332,6 +332,77 @@ func TestUpdateInstance_ChannelNotFound(t *testing.T) {
 	assert.Equal(t, "invalid_channel_switch", response.Error)
 }
 
+func TestUpdateInstance_PreservesVersionSourceWhenNotSpecified(t *testing.T) {
+	tests := []struct {
+		name                   string
+		existingCustomVersion  string
+		existingReleaseChannel string
+		expectedCustomVersion  string
+		expectedReleaseChannel string
+	}{
+		{
+			name:                   "preserves existing release channel",
+			existingCustomVersion:  "",
+			existingReleaseChannel: "stable",
+			expectedCustomVersion:  "",
+			expectedReleaseChannel: "stable",
+		},
+		{
+			name:                   "preserves existing custom version",
+			existingCustomVersion:  "5.9.0",
+			existingReleaseChannel: "",
+			expectedCustomVersion:  "5.9.0",
+			expectedReleaseChannel: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := NewMockUnleashRepository()
+			repo.instances["test-instance"] = &domainUnleash.Instance{
+				Name:               "test-instance",
+				Namespace:          "default",
+				CustomVersion:      tt.existingCustomVersion,
+				ReleaseChannelName: tt.existingReleaseChannel,
+				Version:            "5.10.0",
+				CreatedAt:          time.Now(),
+			}
+
+			channelRepo := &MockReleaseChannelRepository{
+				GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+					return &releasechannel.Channel{
+						Name:    name,
+						Version: "5.10.0",
+					}, nil
+				},
+			}
+
+			handler, router := setupUnleashTestHandler(repo, channelRepo)
+			router.PUT("/unleash/:name", handler.UpdateInstance)
+
+			// Update without specifying version source - only change log level
+			requestBody := map[string]interface{}{
+				"log-level":         "debug",
+				"database-pool-max": 5,
+			}
+			body, _ := json.Marshal(requestBody)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("PUT", "/unleash/test-instance", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+			// Verify the version source was preserved
+			updated := repo.instances["test-instance"]
+			require.NotNil(t, updated)
+			assert.Equal(t, tt.expectedCustomVersion, updated.CustomVersion, "custom version should be preserved")
+			assert.Equal(t, tt.expectedReleaseChannel, updated.ReleaseChannelName, "release channel should be preserved")
+		})
+	}
+}
+
 func TestCreateInstance_DefaultReleaseChannel(t *testing.T) {
 	tests := []struct {
 		name                   string

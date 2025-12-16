@@ -163,20 +163,27 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 
 	req.Name = name
 
+	// Get existing instance to validate changes and preserve version source if not specified
+	existing, err := h.service.Get(ctx, name)
+	if err != nil {
+		h.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Instance not found")
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Error:      "not_found",
+			Message:    "Unleash instance not found",
+			Details:    map[string]string{"instance": name},
+			StatusCode: http.StatusNotFound,
+		})
+		return
+	}
+
+	// Preserve existing version source if neither custom version nor release channel is specified
+	if req.CustomVersion == "" && req.ReleaseChannelName == "" {
+		req.CustomVersion = existing.CustomVersion
+		req.ReleaseChannelName = existing.ReleaseChannelName
+	}
+
 	// Check if switching release channels and validate major version
 	if req.ReleaseChannelName != "" {
-		existing, err := h.service.Get(ctx, name)
-		if err != nil {
-			h.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Instance not found")
-			c.JSON(http.StatusNotFound, ErrorResponse{
-				Error:      "not_found",
-				Message:    "Unleash instance not found",
-				Details:    map[string]string{"instance": name},
-				StatusCode: http.StatusNotFound,
-			})
-			return
-		}
-
 		// If instance has a release channel and switching to a different one, validate major version
 		if existing.ReleaseChannelName != "" && existing.ReleaseChannelName != req.ReleaseChannelName {
 			if err := h.validateReleaseChannelSwitch(ctx, existing.ReleaseChannelName, req.ReleaseChannelName); err != nil {
