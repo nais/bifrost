@@ -59,7 +59,7 @@ func (r *UnleashRepository) List(ctx context.Context, excludeChannelInstances bo
 	for i := range serverList.Items {
 		instance := r.crdToInstance(&serverList.Items[i])
 
-		// Filter channel instances if requested (for v0 API)
+		// Filter channel instances if requested
 		if excludeChannelInstances && instance.HasReleaseChannel() {
 			continue
 		}
@@ -235,6 +235,13 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 		IsReady:   crd.IsReady(),
 		APIUrl:    fmt.Sprintf("https://%s/api/", crd.Spec.ApiIngress.Host),
 		WebUrl:    fmt.Sprintf("https://%s/", crd.Spec.WebIngress.Host),
+
+		// Federation configuration
+		EnableFederation:  crd.Spec.Federation.Enabled,
+		FederationNonce:   crd.Spec.Federation.SecretNonce,
+		AllowedTeams:      getEnvVar(crd, "TEAMS_ALLOWED_TEAMS", ""),
+		AllowedNamespaces: utils.JoinNoEmpty(crd.Spec.Federation.Namespaces, ","),
+		AllowedClusters:   utils.JoinNoEmpty(crd.Spec.Federation.Clusters, ","),
 	}
 
 	// Extract version source

@@ -5,7 +5,6 @@ go 1.25.5
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/gin-gonic/gin v1.11.0
-	github.com/google/go-cmp v0.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/nais/fqdn-policy v0.0.0-20251027123036-7371754b1946
 	github.com/nais/unleasherator v0.0.0-20251211161827-63e3a79c503f
@@ -108,6 +107,7 @@ require (
 	github.com/golangci/unconvert v0.0.0-20240309020433-c5143eacb3ed // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/gordonklaus/ineffassign v0.1.0 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.5.0 // indirect

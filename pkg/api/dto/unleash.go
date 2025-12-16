@@ -7,15 +7,16 @@ import (
 // UnleashConfigRequest represents the JSON request body for creating/updating an Unleash instance
 type UnleashConfigRequest struct {
 	Name                      string `json:"name,omitempty"`
-	CustomVersion             string `json:"custom-version,omitempty"`
-	ReleaseChannelName        string `json:"release-channel-name,omitempty"` // v1 only
-	EnableFederation          bool   `json:"enable-federation,omitempty"`
-	AllowedTeams              string `json:"allowed-teams,omitempty"`
-	AllowedNamespaces         string `json:"allowed-namespaces,omitempty"`
-	AllowedClusters           string `json:"allowed-clusters,omitempty"`
-	LogLevel                  string `json:"log-level,omitempty"`
-	DatabasePoolMax           int    `json:"database-pool-max,omitempty"`
-	DatabasePoolIdleTimeoutMs int    `json:"database-pool-idle-timeout-ms,omitempty"`
+	CustomVersion             string `json:"custom_version,omitempty"`
+	ReleaseChannelName        string `json:"release_channel_name,omitempty"`
+	EnableFederation          bool   `json:"enable_federation,omitempty"`
+	FederationNonce           string `json:"-"` // Internal use only, not exposed in API
+	AllowedTeams              string `json:"allowed_teams,omitempty"`
+	AllowedNamespaces         string `json:"allowed_namespaces,omitempty"`
+	AllowedClusters           string `json:"allowed_clusters,omitempty"`
+	LogLevel                  string `json:"log_level,omitempty"`
+	DatabasePoolMax           int    `json:"database_pool_max,omitempty"`
+	DatabasePoolIdleTimeoutMs int    `json:"database_pool_idle_timeout_ms,omitempty"`
 }
 
 // UnleashInstanceResponse represents the JSON response for an Unleash instance
@@ -30,14 +31,14 @@ type UnleashInstanceResponse struct {
 	APIUrl      string `json:"api_url"`
 	WebUrl      string `json:"web_url"`
 
-	// Version source (v1 only, computed field)
+	// Version source
 	VersionSource      string `json:"version_source,omitempty"`
 	CustomVersion      string `json:"custom_version,omitempty"`
-	ReleaseChannelName string `json:"release_channel_name,omitempty"` // v1 only
+	ReleaseChannelName string `json:"release_channel_name,omitempty"`
 
-	// Read-only status (v1 only)
-	ResolvedImage         string `json:"resolved_image,omitempty"`           // v1 only
-	ChannelNameFromStatus string `json:"channel_name_from_status,omitempty"` // v1 only
+	// Read-only status
+	ResolvedImage         string `json:"resolved_image,omitempty"`
+	ChannelNameFromStatus string `json:"channel_name_from_status,omitempty"`
 }
 
 // UnleashListResponse represents a list of Unleash instances
@@ -68,31 +69,14 @@ func (r *UnleashConfigRequest) ToConfigBuilder() *unleash.ConfigBuilder {
 	}
 
 	if r.EnableFederation {
-		builder.WithFederation("", r.AllowedTeams, r.AllowedNamespaces, r.AllowedClusters)
+		builder.WithFederation(r.FederationNonce, r.AllowedTeams, r.AllowedNamespaces, r.AllowedClusters)
 	}
 
 	return builder
 }
 
-// ToV0Response converts an Instance to v0 API response (no channel fields)
-func ToV0Response(instance *unleash.Instance) *UnleashInstanceResponse {
-	return &UnleashInstanceResponse{
-		Name:          instance.Name,
-		Namespace:     instance.Namespace,
-		CreatedAt:     instance.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Age:           instance.Age(),
-		Version:       instance.Version,
-		Status:        instance.Status(),
-		StatusLabel:   instance.StatusLabel(),
-		APIUrl:        instance.APIUrl,
-		WebUrl:        instance.WebUrl,
-		CustomVersion: instance.CustomVersion,
-		// Explicitly omit channel fields for v0
-	}
-}
-
-// ToV1Response converts an Instance to v1 API response (includes channel fields)
-func ToV1Response(instance *unleash.Instance) *UnleashInstanceResponse {
+// ToInstanceResponse converts an Instance to API response
+func ToInstanceResponse(instance *unleash.Instance) *UnleashInstanceResponse {
 	return &UnleashInstanceResponse{
 		Name:                  instance.Name,
 		Namespace:             instance.Namespace,
@@ -111,23 +95,11 @@ func ToV1Response(instance *unleash.Instance) *UnleashInstanceResponse {
 	}
 }
 
-// ToV0ListResponse converts a list of instances to v0 API response
-func ToV0ListResponse(instances []*unleash.Instance) *UnleashListResponse {
+// ToListResponse converts a list of instances to API response
+func ToListResponse(instances []*unleash.Instance) *UnleashListResponse {
 	responses := make([]*UnleashInstanceResponse, len(instances))
 	for i, instance := range instances {
-		responses[i] = ToV0Response(instance)
-	}
-	return &UnleashListResponse{
-		Instances: responses,
-		Count:     len(responses),
-	}
-}
-
-// ToV1ListResponse converts a list of instances to v1 API response
-func ToV1ListResponse(instances []*unleash.Instance) *UnleashListResponse {
-	responses := make([]*UnleashInstanceResponse, len(instances))
-	for i, instance := range instances {
-		responses[i] = ToV1Response(instance)
+		responses[i] = ToInstanceResponse(instance)
 	}
 	return &UnleashListResponse{
 		Instances: responses,

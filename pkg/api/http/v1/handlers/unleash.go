@@ -38,6 +38,15 @@ type ErrorResponse struct {
 	StatusCode int               `json:"status_code"`
 }
 
+// ListInstances godoc
+//
+//	@Summary		List all Unleash instances
+//	@Description	Returns a list of all Unleash feature flag server instances
+//	@Tags			unleash-v1
+//	@Produce		json
+//	@Success		200	{object}	dto.UnleashListResponse
+//	@Failure		500	{object}	ErrorResponse	"Internal server error"
+//	@Router			/v1/unleash [get]
 func (h *UnleashHandler) ListInstances(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -52,9 +61,19 @@ func (h *UnleashHandler) ListInstances(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.ToV1ListResponse(instances))
+	c.JSON(http.StatusOK, dto.ToListResponse(instances))
 }
 
+// GetInstance godoc
+//
+//	@Summary		Get Unleash instance by name
+//	@Description	Returns details of a specific Unleash instance
+//	@Tags			unleash-v1
+//	@Produce		json
+//	@Param			name	path		string	true	"Instance name"
+//	@Success		200		{object}	dto.UnleashInstanceResponse
+//	@Failure		404		{object}	ErrorResponse	"Instance not found"
+//	@Router			/v1/unleash/{name} [get]
 func (h *UnleashHandler) GetInstance(c *gin.Context) {
 	ctx := c.Request.Context()
 	name := c.Param("name")
@@ -71,9 +90,21 @@ func (h *UnleashHandler) GetInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.ToV1Response(instance))
+	c.JSON(http.StatusOK, dto.ToInstanceResponse(instance))
 }
 
+// CreateInstance godoc
+//
+//	@Summary		Create a new Unleash instance
+//	@Description	Creates a new Unleash feature flag server instance with database and credentials
+//	@Tags			unleash-v1
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		dto.UnleashConfigRequest	true	"Unleash instance configuration"
+//	@Success		201		{object}	dto.UnleashInstanceResponse
+//	@Failure		400		{object}	ErrorResponse	"Invalid request or validation error"
+//	@Failure		500		{object}	ErrorResponse	"Internal server error"
+//	@Router			/v1/unleash [post]
 func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 	ctx := c.Request.Context()
 	var req dto.UnleashConfigRequest
@@ -88,6 +119,9 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 		})
 		return
 	}
+
+	// Enable federation by default for new instances
+	req.EnableFederation = true
 
 	builder := req.ToConfigBuilder()
 	if req.CustomVersion == "" && req.ReleaseChannelName == "" {
@@ -142,9 +176,23 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, dto.ToV1Response(instance))
+	c.JSON(http.StatusCreated, dto.ToInstanceResponse(instance))
 }
 
+// UpdateInstance godoc
+//
+//	@Summary		Update an existing Unleash instance
+//	@Description	Updates configuration of an existing Unleash instance. Preserves federation settings if not specified.
+//	@Tags			unleash-v1
+//	@Accept			json
+//	@Produce		json
+//	@Param			name	path		string						true	"Instance name"
+//	@Param			request	body		dto.UnleashConfigRequest	true	"Updated Unleash configuration"
+//	@Success		200		{object}	dto.UnleashInstanceResponse
+//	@Failure		400		{object}	ErrorResponse	"Invalid request or validation error"
+//	@Failure		404		{object}	ErrorResponse	"Instance not found"
+//	@Failure		500		{object}	ErrorResponse	"Internal server error"
+//	@Router			/v1/unleash/{name} [put]
 func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	ctx := c.Request.Context()
 	name := c.Param("name")
@@ -180,6 +228,20 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	if req.CustomVersion == "" && req.ReleaseChannelName == "" {
 		req.CustomVersion = existing.CustomVersion
 		req.ReleaseChannelName = existing.ReleaseChannelName
+	}
+
+	// Preserve federation settings from existing instance
+	// Federation is always enabled for managed instances
+	req.EnableFederation = true
+	req.FederationNonce = existing.FederationNonce
+	if req.AllowedTeams == "" {
+		req.AllowedTeams = existing.AllowedTeams
+	}
+	if req.AllowedNamespaces == "" {
+		req.AllowedNamespaces = existing.AllowedNamespaces
+	}
+	if req.AllowedClusters == "" {
+		req.AllowedClusters = existing.AllowedClusters
 	}
 
 	// Check if switching release channels and validate major version
@@ -245,9 +307,19 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.ToV1Response(instance))
+	c.JSON(http.StatusOK, dto.ToInstanceResponse(instance))
 }
 
+// DeleteInstance godoc
+//
+//	@Summary		Delete an Unleash instance
+//	@Description	Deletes an existing Unleash instance and its associated database and credentials
+//	@Tags			unleash-v1
+//	@Param			name	path	string	true	"Instance name"
+//	@Success		204	"Successfully deleted"
+//	@Failure		404	{object}	ErrorResponse	"Instance not found"
+//	@Failure		500	{object}	ErrorResponse	"Internal server error"
+//	@Router			/v1/unleash/{name} [delete]
 func (h *UnleashHandler) DeleteInstance(c *gin.Context) {
 	ctx := c.Request.Context()
 	name := c.Param("name")

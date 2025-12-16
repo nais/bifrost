@@ -21,6 +21,13 @@ type Instance struct {
 	CustomVersion      string
 	ReleaseChannelName string
 
+	// Federation configuration
+	EnableFederation  bool
+	FederationNonce   string
+	AllowedTeams      string
+	AllowedNamespaces string
+	AllowedClusters   string
+
 	// Read-only status from CRD
 	ResolvedImage         string
 	ChannelNameFromStatus string

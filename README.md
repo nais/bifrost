@@ -18,7 +18,7 @@ Bifröst is a REST API that orchestrates Unleash deployments on Kubernetes, hand
 
 ```bash
 # Create an Unleash instance with a specific version
-curl -X POST http://bifrost/v1/instances \
+curl -X POST http://bifrost/v1/unleash \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-unleash",
@@ -27,7 +27,7 @@ curl -X POST http://bifrost/v1/instances \
   }'
 
 # Or use a release channel for automatic updates
-curl -X POST http://bifrost/v1/instances \
+curl -X POST http://bifrost/v1/unleash \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-unleash",
@@ -38,55 +38,24 @@ curl -X POST http://bifrost/v1/instances \
 
 ## API Reference
 
-Bifröst exposes two API versions:
+Interactive API documentation is available at `/swagger/index.html` when the server is running.
 
-### v0 API (Legacy)
-
-Backward-compatible API for existing clients. Only supports custom version management (release channels are filtered out).
-
-**Endpoints:**
+### Endpoints
 
 ```http
-GET    /healthz                  - Health check
-POST   /unleash/new              - Create new instance (custom version only)
-POST   /unleash/:id/edit         - Update existing instance
-DELETE /unleash/:id              - Delete instance
+GET    /healthz                       - Health check
+
+GET    /v1/unleash                    - List all instances
+GET    /v1/unleash/:name              - Get instance details
+POST   /v1/unleash                    - Create new instance
+PUT    /v1/unleash/:name              - Update instance
+DELETE /v1/unleash/:name              - Delete instance
+
+GET    /v1/releasechannels            - List all release channels
+GET    /v1/releasechannels/:name      - Get channel details
 ```
 
-**Create/Update Request:**
-
-```json
-{
-  "name": "my-unleash",
-  "custom-version": "5.10.2",
-  "enable-federation": true,
-  "allowed-teams": "team-a,team-b",
-  "log-level": "info",
-  "database-pool-max": 5,
-  "database-pool-idle-timeout-ms": 2000
-}
-```
-
-> **Note:** Instances managed by release channels are hidden from v0 endpoints.
-
-### v1 API (Recommended)
-
-Full-featured API with release channel support and structured error responses.
-
-**Endpoints:**
-
-```http
-GET    /v1/instances             - List all instances (includes channel-managed)
-GET    /v1/instances/:name       - Get instance details
-POST   /v1/instances             - Create new instance
-PUT    /v1/instances/:name       - Update instance
-DELETE /v1/instances/:name       - Delete instance
-
-GET    /v1/channels              - List all release channels
-GET    /v1/channels/:name        - Get channel details
-```
-
-**Create/Update Instance:**
+### Create/Update Instance
 
 ```json
 {
@@ -95,28 +64,33 @@ GET    /v1/channels/:name        - Get channel details
   "release_channel_name": "stable",    // (mutually exclusive)
   "enable_federation": true,
   "allowed_teams": "team-a,team-b",
+  "allowed_clusters": "dev-gcp,prod-gcp",
   "log_level": "info",
   "database_pool_max": 5,
   "database_pool_idle_timeout_ms": 2000
 }
 ```
 
-**Response Format:**
+### Instance Response
 
 ```json
 {
   "name": "my-unleash",
+  "namespace": "unleash",
   "version": "5.10.2",
-  "custom_version": "5.10.2",          // if using custom version
-  "release_channel_name": "stable",    // if using release channel
-  "is_ready": true,
+  "version_source": "custom",
+  "custom_version": "5.10.2",
+  "release_channel_name": "",
+  "status": "Ready",
+  "status_label": "green",
   "api_url": "https://my-unleash-api.example.com/api/",
   "web_url": "https://my-unleash.example.com/",
-  "created_at": "2024-01-01T00:00:00Z"
+  "created_at": "2024-01-01T00:00:00Z",
+  "age": "2 weeks"
 }
 ```
 
-**Release Channel Response:**
+### Release Channel Response
 
 ```json
 {
@@ -131,7 +105,7 @@ GET    /v1/channels/:name        - Get channel details
 }
 ```
 
-**Error Response:**
+### Error Response
 
 ```json
 {

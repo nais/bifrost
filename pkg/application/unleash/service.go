@@ -47,7 +47,7 @@ func NewService(repository unleash.Repository, dbManager DatabaseManager, config
 	}
 }
 
-// List returns all unleash instances, optionally excluding those with release channels (for v0 API)
+// List returns all unleash instances, optionally excluding those with release channels
 func (s *Service) List(ctx context.Context, excludeChannelInstances bool) ([]*unleash.Instance, error) {
 	return s.repository.List(ctx, excludeChannelInstances)
 }
