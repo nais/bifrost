@@ -21,14 +21,30 @@ func NewReleaseChannelHandler(repository releasechannel.Repository, logger *logr
 }
 
 type ReleaseChannelResponse struct {
-	Name           string `json:"name"`
-	Version        string `json:"version"`
-	Type           string `json:"type"`
-	Schedule       string `json:"schedule,omitempty"`
-	Description    string `json:"description,omitempty"`
-	CurrentVersion string `json:"current_version"`
-	LastUpdated    string `json:"last_updated"`
-	CreatedAt      string `json:"created_at"`
+	// Name is the unique identifier of the release channel (e.g., "stable", "rapid")
+	Name string `json:"name" example:"stable"`
+
+	// Image is the full container image reference including tag (e.g., "quay.io/unleash/unleash-server:6.3.0")
+	Image string `json:"image" example:"quay.io/unleash/unleash-server:6.3.0"`
+
+	// CreatedAt is the timestamp when the release channel was created (RFC3339 format)
+	CreatedAt string `json:"created_at" example:"2024-01-01T00:00:00Z"`
+
+	// CurrentVersion is the current version tracked by the release channel status
+	CurrentVersion string `json:"current_version" example:"6.3.0"`
+
+	// LastUpdated is the timestamp when the release channel was last reconciled (RFC3339 format)
+	LastUpdated string `json:"last_updated,omitempty" example:"2024-03-15T10:30:00Z"`
+
+	// Legacy fields - kept for backwards compatibility
+	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
+	Version string `json:"version" example:"quay.io/unleash/unleash-server:6.3.0"`
+	// Deprecated: This field is reserved for future use and always returns an empty string.
+	Type string `json:"type,omitempty"`
+	// Deprecated: This field is reserved for future use and always returns an empty string.
+	Schedule string `json:"schedule,omitempty"`
+	// Deprecated: This field is reserved for future use and always returns an empty string.
+	Description string `json:"description,omitempty"`
 }
 
 // ListChannels godoc
@@ -92,19 +108,25 @@ func (h *ReleaseChannelHandler) GetChannel(c *gin.Context) {
 }
 
 func toReleaseChannelResponse(channel *releasechannel.Channel) ReleaseChannelResponse {
-	var lastUpdated string
-	if !channel.Status.LastUpdated.IsZero() {
-		lastUpdated = channel.Status.LastUpdated.Format("2006-01-02T15:04:05Z07:00")
+	lastUpdated := ""
+	if !channel.Status.LastReconcileTime.IsZero() {
+		lastUpdated = channel.Status.LastReconcileTime.Time.Format("2006-01-02T15:04:05Z07:00")
 	}
 
 	return ReleaseChannelResponse{
-		Name:           channel.Name,
-		Version:        channel.Version,
-		Type:           channel.Spec.Type,
-		Schedule:       channel.Spec.Schedule,
-		Description:    channel.Spec.Description,
-		CurrentVersion: channel.Status.CurrentVersion,
-		LastUpdated:    lastUpdated,
-		CreatedAt:      channel.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		// Core fields
+		Name:      channel.Name,
+		Image:     channel.Image,
+		CreatedAt: channel.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+
+		// Current version from release channel status
+		CurrentVersion: channel.Status.Version,
+
+		// Last reconcile time from status
+		LastUpdated: lastUpdated,
+
+		// Legacy fields - kept for backwards compatibility
+		Version: channel.Image, // Deprecated: same as image
+		// Type, Schedule, Description left empty - reserved for future use
 	}
 }

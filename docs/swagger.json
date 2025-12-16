@@ -333,28 +333,46 @@
             "type": "object",
             "properties": {
                 "created_at": {
-                    "type": "string"
+                    "description": "CreatedAt is the timestamp when the release channel was created (RFC3339 format)",
+                    "type": "string",
+                    "example": "2024-01-01T00:00:00Z"
                 },
                 "current_version": {
-                    "type": "string"
+                    "description": "CurrentVersion is the current version tracked by the release channel status",
+                    "type": "string",
+                    "example": "6.3.0"
                 },
                 "description": {
+                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
                     "type": "string"
+                },
+                "image": {
+                    "description": "Image is the full container image reference including tag (e.g., \"quay.io/unleash/unleash-server:6.3.0\")",
+                    "type": "string",
+                    "example": "quay.io/unleash/unleash-server:6.3.0"
                 },
                 "last_updated": {
-                    "type": "string"
+                    "description": "LastUpdated is the timestamp when the release channel was last reconciled (RFC3339 format)",
+                    "type": "string",
+                    "example": "2024-03-15T10:30:00Z"
                 },
                 "name": {
-                    "type": "string"
+                    "description": "Name is the unique identifier of the release channel (e.g., \"stable\", \"rapid\")",
+                    "type": "string",
+                    "example": "stable"
                 },
                 "schedule": {
+                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
                     "type": "string"
                 },
                 "type": {
+                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
                     "type": "string"
                 },
                 "version": {
-                    "type": "string"
+                    "description": "Legacy fields - kept for backwards compatibility\nDeprecated: Use 'image' instead. This field returns the same value as 'image'.",
+                    "type": "string",
+                    "example": "quay.io/unleash/unleash-server:6.3.0"
                 }
             }
         },

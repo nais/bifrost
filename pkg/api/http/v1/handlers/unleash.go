@@ -352,22 +352,16 @@ func (h *UnleashHandler) validateReleaseChannelSwitch(ctx context.Context, oldCh
 		return fmt.Errorf("failed to get new release channel %s: %w", newChannelName, err)
 	}
 
-	// Parse old version
-	oldVersion := oldChannel.Version
-	if oldVersion == "" {
-		oldVersion = oldChannel.Status.CurrentVersion
-	}
+	// Extract version from image (e.g., "quay.io/unleash/unleash-server:6.3.0" -> "6.3.0")
+	oldVersion := extractVersionFromImage(oldChannel.Image)
 	oldVersion = strings.TrimPrefix(oldVersion, "v")
 	oldSemver, err := semver.NewVersion(oldVersion)
 	if err != nil {
 		return fmt.Errorf("failed to parse old channel version %s: %w", oldVersion, err)
 	}
 
-	// Parse new version
-	newVersion := newChannel.Version
-	if newVersion == "" {
-		newVersion = newChannel.Status.CurrentVersion
-	}
+	// Extract version from image
+	newVersion := extractVersionFromImage(newChannel.Image)
 	newVersion = strings.TrimPrefix(newVersion, "v")
 	newSemver, err := semver.NewVersion(newVersion)
 	if err != nil {
@@ -390,4 +384,13 @@ func (h *UnleashHandler) validateReleaseChannelSwitch(ctx context.Context, oldCh
 	}).Debug("Release channel switch validation passed")
 
 	return nil
+}
+
+// extractVersionFromImage extracts the version tag from a container image reference.
+// e.g., "quay.io/unleash/unleash-server:6.3.0" -> "6.3.0"
+func extractVersionFromImage(image string) string {
+	if idx := strings.LastIndex(image, ":"); idx != -1 {
+		return image[idx+1:]
+	}
+	return ""
 }

@@ -22,13 +22,13 @@ type Channel struct {
 	// Name is the channel identifier (e.g., "stable", "rapid", "regular")
 	Name string
 
-	// Version is the current Unleash version on this channel
-	Version string
+	// Image is the full container image from spec.image (e.g., "quay.io/unleash/unleash-server:6.3.0")
+	Image string
 
 	// CreatedAt is when the channel was created
 	CreatedAt time.Time
 
-	// Spec contains the raw channel specification
+	// Spec contains the channel specification
 	Spec ChannelSpec
 
 	// Status contains the channel's current state
@@ -37,23 +37,38 @@ type Channel struct {
 
 // ChannelSpec defines the desired state of a ReleaseChannel
 type ChannelSpec struct {
-	// Type is the channel type (e.g., "automatic", "manual")
-	Type string
+	// MaxParallel is the maximum number of instances to deploy in parallel
+	MaxParallel int
 
-	// Schedule is the update schedule (cron expression) if automatic
-	Schedule string
-
-	// Description provides information about the channel's purpose
-	Description string
+	// CanaryEnabled indicates if canary deployment is enabled
+	CanaryEnabled bool
 }
 
 // ChannelStatus defines the observed state of a ReleaseChannel
 type ChannelStatus struct {
-	// CurrentVersion is the current Unleash version on this channel
-	CurrentVersion string
+	// Phase is the current rollout phase (Idle, Canary, Rolling, Completed, Failed, etc.)
+	Phase string
 
-	// LastUpdated is when the channel version was last updated
-	LastUpdated metav1.Time
+	// Version is the current version from the status
+	Version string
+
+	// Instances is the total number of instances managed by this channel
+	Instances int
+
+	// InstancesUpToDate is the number of instances running the target image
+	InstancesUpToDate int
+
+	// Progress is the rollout progress as a percentage (0-100)
+	Progress int
+
+	// Completed indicates if the rollout is complete
+	Completed bool
+
+	// FailureReason provides the reason for failure if the rollout failed
+	FailureReason string
+
+	// LastReconcileTime is when the channel was last reconciled
+	LastReconcileTime metav1.Time
 
 	// Conditions represent the channel's operational state
 	Conditions []metav1.Condition
@@ -64,7 +79,7 @@ func (c *Channel) Age() time.Duration {
 	return time.Since(c.CreatedAt)
 }
 
-// IsAutomatic returns true if the channel is automatically updated
-func (c *Channel) IsAutomatic() bool {
-	return c.Spec.Type == "automatic"
+// IsCanary returns true if the channel has canary deployment enabled
+func (c *Channel) IsCanary() bool {
+	return c.Spec.CanaryEnabled
 }

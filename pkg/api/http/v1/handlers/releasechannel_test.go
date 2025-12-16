@@ -48,30 +48,36 @@ func TestListChannels_Success(t *testing.T) {
 			return []*releasechannel.Channel{
 				{
 					Name:      "stable",
-					Version:   "5.11.0",
+					Image:     "quay.io/unleash/unleash-server:5.11.0",
 					CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 					Spec: releasechannel.ChannelSpec{
-						Type:        "sequential",
-						Schedule:    "0 2 * * 1",
-						Description: "Stable release channel",
+						MaxParallel:   2,
+						CanaryEnabled: false,
 					},
 					Status: releasechannel.ChannelStatus{
-						CurrentVersion: "5.11.0",
-						LastUpdated:    metav1.NewTime(time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)),
+						Phase:             "Completed",
+						Instances:         10,
+						InstancesUpToDate: 10,
+						Progress:          100,
+						Completed:         true,
+						LastReconcileTime: metav1.NewTime(time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)),
 					},
 				},
 				{
 					Name:      "rapid",
-					Version:   "5.12.0-beta.1",
+					Image:     "quay.io/unleash/unleash-server:5.12.0-beta.1",
 					CreatedAt: time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC),
 					Spec: releasechannel.ChannelSpec{
-						Type:        "canary",
-						Schedule:    "0 2 * * *",
-						Description: "Rapid release channel with canary rollout",
+						MaxParallel:   1,
+						CanaryEnabled: true,
 					},
 					Status: releasechannel.ChannelStatus{
-						CurrentVersion: "5.12.0-beta.1",
-						LastUpdated:    metav1.NewTime(time.Date(2024, 3, 20, 14, 15, 0, 0, time.UTC)),
+						Phase:             "Rolling",
+						Instances:         5,
+						InstancesUpToDate: 3,
+						Progress:          60,
+						Completed:         false,
+						LastReconcileTime: metav1.NewTime(time.Date(2024, 3, 20, 14, 15, 0, 0, time.UTC)),
 					},
 				},
 			}, nil
@@ -94,19 +100,22 @@ func TestListChannels_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(response))
 
-	// Verify first channel
+	// Verify first channel - only configuration fields
 	assert.Equal(t, "stable", response[0].Name)
-	assert.Equal(t, "5.11.0", response[0].Version)
-	assert.Equal(t, "sequential", response[0].Type)
-	assert.Equal(t, "0 2 * * 1", response[0].Schedule)
-	assert.Equal(t, "Stable release channel", response[0].Description)
-	assert.Equal(t, "5.11.0", response[0].CurrentVersion)
-	assert.Equal(t, "2024-03-15T10:30:00Z", response[0].LastUpdated)
+	assert.Equal(t, "quay.io/unleash/unleash-server:5.11.0", response[0].Image)
+	assert.Equal(t, "2024-01-01T00:00:00Z", response[0].CreatedAt)
+
+	// Verify legacy fields (backwards compatibility)
+	assert.Equal(t, response[0].Image, response[0].Version, "Version should equal Image for backwards compatibility")
+	// CurrentVersion comes from status.version which is typically empty until set by the controller
+	assert.Equal(t, "", response[0].CurrentVersion, "CurrentVersion should be empty when status.version is not set")
+	// LastUpdated comes from status.lastReconcileTime
+	assert.Equal(t, "2024-03-15T10:30:00Z", response[0].LastUpdated, "LastUpdated should be populated from lastReconcileTime")
 
 	// Verify second channel
 	assert.Equal(t, "rapid", response[1].Name)
-	assert.Equal(t, "5.12.0-beta.1", response[1].Version)
-	assert.Equal(t, "canary", response[1].Type)
+	assert.Equal(t, "quay.io/unleash/unleash-server:5.12.0-beta.1", response[1].Image)
+	assert.Equal(t, "2024-02-01T00:00:00Z", response[1].CreatedAt)
 }
 
 func TestListChannels_EmptyList(t *testing.T) {
@@ -163,16 +172,19 @@ func TestGetChannel_Success(t *testing.T) {
 			assert.Equal(t, "stable", name)
 			return &releasechannel.Channel{
 				Name:      "stable",
-				Version:   "5.11.0",
+				Image:     "quay.io/unleash/unleash-server:5.11.0",
 				CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 				Spec: releasechannel.ChannelSpec{
-					Type:        "sequential",
-					Schedule:    "0 2 * * 1",
-					Description: "Stable release channel",
+					MaxParallel:   2,
+					CanaryEnabled: false,
 				},
 				Status: releasechannel.ChannelStatus{
-					CurrentVersion: "5.11.0",
-					LastUpdated:    metav1.NewTime(time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)),
+					Phase:             "Completed",
+					Instances:         10,
+					InstancesUpToDate: 10,
+					Progress:          100,
+					Completed:         true,
+					LastReconcileTime: metav1.NewTime(time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)),
 				},
 			}, nil
 		},
@@ -193,29 +205,31 @@ func TestGetChannel_Success(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	assert.Equal(t, "stable", response.Name)
-	assert.Equal(t, "5.11.0", response.Version)
-	assert.Equal(t, "sequential", response.Type)
-	assert.Equal(t, "0 2 * * 1", response.Schedule)
-	assert.Equal(t, "Stable release channel", response.Description)
-	assert.Equal(t, "5.11.0", response.CurrentVersion)
-	assert.Equal(t, "2024-03-15T10:30:00Z", response.LastUpdated)
+	assert.Equal(t, "quay.io/unleash/unleash-server:5.11.0", response.Image)
 	assert.Equal(t, "2024-01-01T00:00:00Z", response.CreatedAt)
+	// Verify status fields
+	assert.Equal(t, "", response.CurrentVersion)
+	assert.Equal(t, "2024-03-15T10:30:00Z", response.LastUpdated)
+	// Legacy fields
+	assert.Equal(t, response.Image, response.Version)
 }
 
-func TestGetChannel_WithoutLastUpdated(t *testing.T) {
+func TestGetChannel_WithoutLastReconciled(t *testing.T) {
 	mockRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
 				Name:      "testing",
-				Version:   "5.13.0-rc.1",
+				Image:     "quay.io/unleash/unleash-server:5.13.0-rc.1",
 				CreatedAt: time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
 				Spec: releasechannel.ChannelSpec{
-					Type:        "parallel",
-					Description: "Testing channel",
+					MaxParallel:   4,
+					CanaryEnabled: true,
 				},
 				Status: releasechannel.ChannelStatus{
-					CurrentVersion: "",
-					LastUpdated:    metav1.Time{}, // Zero time
+					Phase:             "Idle",
+					Instances:         0,
+					Progress:          0,
+					LastReconcileTime: metav1.Time{}, // Zero time
 				},
 			}, nil
 		},
@@ -236,8 +250,8 @@ func TestGetChannel_WithoutLastUpdated(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	assert.Equal(t, "testing", response.Name)
-	assert.Empty(t, response.LastUpdated, "LastUpdated should be empty when status time is zero")
-	assert.Empty(t, response.CurrentVersion)
+	assert.Equal(t, "quay.io/unleash/unleash-server:5.13.0-rc.1", response.Image)
+	assert.Empty(t, response.LastUpdated, "LastUpdated should be empty when lastReconcileTime is zero")
 }
 
 func TestGetChannel_NotFound(t *testing.T) {
