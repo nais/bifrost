@@ -21,20 +21,24 @@ func NewReleaseChannelHandler(repository releasechannel.Repository, logger *logr
 }
 
 type ReleaseChannelResponse struct {
-	// Core fields
-	Name      string `json:"name"`
-	Image     string `json:"image"`
-	CreatedAt string `json:"created_at"`
+	// Name is the unique identifier of the release channel (e.g., "stable", "rapid")
+	Name string `json:"name" example:"stable"`
+
+	// Image is the full container image reference including tag (e.g., "quay.io/unleash/unleash-server:6.3.0")
+	Image string `json:"image" example:"quay.io/unleash/unleash-server:6.3.0"`
+
+	// CreatedAt is the timestamp when the release channel was created (RFC3339 format)
+	CreatedAt string `json:"created_at" example:"2024-01-01T00:00:00Z"`
 
 	// CurrentVersion is the current version tracked by the release channel status
-	CurrentVersion string `json:"current_version"`
+	CurrentVersion string `json:"current_version" example:"6.3.0"`
 
-	// LastUpdated is when the release channel was last reconciled
-	LastUpdated string `json:"last_updated,omitempty"`
+	// LastUpdated is the timestamp when the release channel was last reconciled (RFC3339 format)
+	LastUpdated string `json:"last_updated,omitempty" example:"2024-03-15T10:30:00Z"`
 
 	// Legacy fields - kept for backwards compatibility
 	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
-	Version string `json:"version"`
+	Version string `json:"version" example:"quay.io/unleash/unleash-server:6.3.0"`
 	// Deprecated: This field is reserved for future use and always returns an empty string.
 	Type string `json:"type,omitempty"`
 	// Deprecated: This field is reserved for future use and always returns an empty string.

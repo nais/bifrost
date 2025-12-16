@@ -35,22 +35,33 @@ definitions:
   handlers.ReleaseChannelResponse:
     properties:
       created_at:
+        description: CreatedAt is the timestamp when the release channel was created
+          (RFC3339 format)
+        example: "2024-01-01T00:00:00Z"
         type: string
       current_version:
         description: CurrentVersion is the current version tracked by the release
           channel status
+        example: 6.3.0
         type: string
       description:
         description: 'Deprecated: This field is reserved for future use and always
           returns an empty string.'
         type: string
       image:
+        description: Image is the full container image reference including tag (e.g.,
+          "quay.io/unleash/unleash-server:6.3.0")
+        example: quay.io/unleash/unleash-server:6.3.0
         type: string
       last_updated:
-        description: LastUpdated is when the release channel was last reconciled
+        description: LastUpdated is the timestamp when the release channel was last
+          reconciled (RFC3339 format)
+        example: "2024-03-15T10:30:00Z"
         type: string
       name:
-        description: Core fields
+        description: Name is the unique identifier of the release channel (e.g., "stable",
+          "rapid")
+        example: stable
         type: string
       schedule:
         description: 'Deprecated: This field is reserved for future use and always
@@ -64,6 +75,7 @@ definitions:
         description: |-
           Legacy fields - kept for backwards compatibility
           Deprecated: Use 'image' instead. This field returns the same value as 'image'.
+        example: quay.io/unleash/unleash-server:6.3.0
         type: string
     type: object
   handlers.Unleash:
