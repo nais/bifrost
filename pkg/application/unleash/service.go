@@ -152,11 +152,13 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
-	if err := s.dbManager.DeleteDatabaseUser(ctx, name); err != nil {
+	// Delete database before user to avoid dependency errors
+	// (PostgreSQL won't let you drop a user that owns database objects)
+	if err := s.dbManager.DeleteDatabase(ctx, name); err != nil {
 		return err
 	}
 
-	if err := s.dbManager.DeleteDatabase(ctx, name); err != nil {
+	if err := s.dbManager.DeleteDatabaseUser(ctx, name); err != nil {
 		return err
 	}
 
