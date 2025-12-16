@@ -338,28 +338,67 @@ const docTemplate = `{
         "handlers.ReleaseChannelResponse": {
             "type": "object",
             "properties": {
+                "canary_enabled": {
+                    "type": "boolean"
+                },
+                "completed": {
+                    "type": "boolean"
+                },
                 "created_at": {
                     "type": "string"
                 },
                 "current_version": {
+                    "description": "Deprecated: Use 'image' instead. This field returns the same value as 'image'.",
                     "type": "string"
                 },
                 "description": {
+                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "instances": {
+                    "type": "integer"
+                },
+                "instances_up_to_date": {
+                    "type": "integer"
+                },
+                "last_reconciled": {
                     "type": "string"
                 },
                 "last_updated": {
+                    "description": "Deprecated: Use 'last_reconciled' instead.",
                     "type": "string"
+                },
+                "max_parallel": {
+                    "description": "Strategy fields from CRD",
+                    "type": "integer"
                 },
                 "name": {
+                    "description": "Core fields",
                     "type": "string"
                 },
+                "phase": {
+                    "description": "Status fields from CRD",
+                    "type": "string"
+                },
+                "progress": {
+                    "type": "integer"
+                },
                 "schedule": {
+                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
                     "type": "string"
                 },
                 "type": {
+                    "description": "Deprecated: This field is reserved for future use and always returns an empty string.",
                     "type": "string"
                 },
                 "version": {
+                    "description": "Legacy fields - kept for backwards compatibility\nDeprecated: Use 'image' instead. This field returns the same value as 'image'.",
                     "type": "string"
                 }
             }

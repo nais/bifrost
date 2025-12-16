@@ -62,38 +62,28 @@ func (r *ReleaseChannelRepository) Get(ctx context.Context, name string) (*relea
 
 // convertToChannel converts a Kubernetes ReleaseChannel CRD to our domain model
 func convertToChannel(crd *releasechannelv1.ReleaseChannel) *releasechannel.Channel {
-	// Extract version from the image string (format: "registry/image:version")
-	version := string(crd.Spec.Image)
-	if crd.Status.Version != "" && crd.Status.Version != "unknown" {
-		version = crd.Status.Version
-	}
-
-	// Determine channel type based on strategy
-	channelType := "sequential"
-	if crd.Spec.Strategy.Canary.Enabled {
-		channelType = "canary"
-	} else if crd.Spec.Strategy.MaxParallel > 1 {
-		channelType = "parallel"
-	}
-
-	var lastUpdated metav1.Time
+	var lastReconcileTime metav1.Time
 	if crd.Status.LastReconcileTime != nil {
-		lastUpdated = *crd.Status.LastReconcileTime
+		lastReconcileTime = *crd.Status.LastReconcileTime
 	}
 
 	return &releasechannel.Channel{
 		Name:      crd.Name,
-		Version:   version,
+		Image:     string(crd.Spec.Image),
 		CreatedAt: crd.CreationTimestamp.Time,
 		Spec: releasechannel.ChannelSpec{
-			Type:        channelType,
-			Schedule:    "", // Not available in the CRD
-			Description: string(crd.Spec.Image),
+			MaxParallel:   crd.Spec.Strategy.MaxParallel,
+			CanaryEnabled: crd.Spec.Strategy.Canary.Enabled,
 		},
 		Status: releasechannel.ChannelStatus{
-			CurrentVersion: string(crd.Spec.Image),
-			LastUpdated:    lastUpdated,
-			Conditions:     crd.Status.Conditions,
+			Phase:             string(crd.Status.Phase),
+			Instances:         crd.Status.Instances,
+			InstancesUpToDate: crd.Status.InstancesUpToDate,
+			Progress:          crd.Status.Progress,
+			Completed:         crd.Status.Rollout,
+			FailureReason:     crd.Status.FailureReason,
+			LastReconcileTime: lastReconcileTime,
+			Conditions:        crd.Status.Conditions,
 		},
 	}
 }

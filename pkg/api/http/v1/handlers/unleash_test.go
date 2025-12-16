@@ -263,21 +263,18 @@ func TestUpdateInstance_ReleaseChannelDowngradeProtection(t *testing.T) {
 					switch name {
 					case "stable":
 						return &releasechannel.Channel{
-							Name:    "stable",
-							Version: "5.10.0",
-							Status:  releasechannel.ChannelStatus{CurrentVersion: "5.10.0"},
+							Name:  "stable",
+							Image: "quay.io/unleash/unleash-server:5.10.0",
 						}, nil
 					case "rapid":
 						return &releasechannel.Channel{
-							Name:    "rapid",
-							Version: "5.11.0",
-							Status:  releasechannel.ChannelStatus{CurrentVersion: "5.11.0"},
+							Name:  "rapid",
+							Image: "quay.io/unleash/unleash-server:5.11.0",
 						}, nil
 					case "next":
 						return &releasechannel.Channel{
-							Name:    "next",
-							Version: "6.0.0",
-							Status:  releasechannel.ChannelStatus{CurrentVersion: "6.0.0"},
+							Name:  "next",
+							Image: "quay.io/unleash/unleash-server:6.0.0",
 						}, nil
 					default:
 						return nil, errors.New("channel not found")
@@ -330,8 +327,8 @@ func TestUpdateInstance_NewChannelAssignment(t *testing.T) {
 	channelRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
-				Name:    "stable",
-				Version: "5.11.0",
+				Name:  "stable",
+				Image: "quay.io/unleash/unleash-server:5.11.0",
 			}, nil
 		},
 	}
@@ -432,8 +429,8 @@ func TestUpdateInstance_PreservesVersionSourceWhenNotSpecified(t *testing.T) {
 			channelRepo := &MockReleaseChannelRepository{
 				GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 					return &releasechannel.Channel{
-						Name:    name,
-						Version: "5.10.0",
+						Name:  name,
+						Image: "quay.io/unleash/unleash-server:5.10.0",
 					}, nil
 				},
 			}
@@ -514,8 +511,8 @@ func TestCreateInstance_DefaultReleaseChannel(t *testing.T) {
 			channelRepo := &MockReleaseChannelRepository{
 				GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 					return &releasechannel.Channel{
-						Name:    name,
-						Version: "5.10.0",
+						Name:  name,
+						Image: "quay.io/unleash/unleash-server:5.10.0",
 					}, nil
 				},
 			}
@@ -568,8 +565,8 @@ func TestCreateInstance_ExplicitVersionsNotAffectedByDefault(t *testing.T) {
 	channelRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
-				Name:    name,
-				Version: "5.10.0",
+				Name:  name,
+				Image: "quay.io/unleash/unleash-server:5.10.0",
 			}, nil
 		},
 	}
@@ -671,8 +668,8 @@ func TestCreateInstance_OptionalFieldsUseDefaults(t *testing.T) {
 	channelRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
-				Name:    name,
-				Version: "5.10.0",
+				Name:  name,
+				Image: "quay.io/unleash/unleash-server:5.10.0",
 			}, nil
 		},
 	}
@@ -720,8 +717,8 @@ func TestUpdateInstance_OptionalFieldsPreserveExisting(t *testing.T) {
 	channelRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
-				Name:    name,
-				Version: "5.10.0",
+				Name:  name,
+				Image: "quay.io/unleash/unleash-server:5.10.0",
 			}, nil
 		},
 	}
@@ -751,8 +748,8 @@ func TestCreateInstance_FederationEnabledByDefault(t *testing.T) {
 	channelRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
-				Name:    name,
-				Version: "5.10.0",
+				Name:  name,
+				Image: "quay.io/unleash/unleash-server:5.10.0",
 			}, nil
 		},
 	}
@@ -805,8 +802,8 @@ func TestUpdateInstance_PreservesFederationSettings(t *testing.T) {
 	channelRepo := &MockReleaseChannelRepository{
 		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
 			return &releasechannel.Channel{
-				Name:    name,
-				Version: "5.10.0",
+				Name:  name,
+				Image: "quay.io/unleash/unleash-server:5.10.0",
 			}, nil
 		},
 	}
