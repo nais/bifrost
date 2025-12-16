@@ -602,3 +602,84 @@ func TestCreateInstance_NoVersionSourceRejected(t *testing.T) {
 	_, exists := repo.instances["no-version-instance"]
 	assert.False(t, exists, "instance should not have been created")
 }
+
+func TestCreateInstance_OptionalFieldsUseDefaults(t *testing.T) {
+	// When log-level and database-pool-max are not specified,
+	// the instance should be created with default values
+	repo := NewMockUnleashRepository()
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{
+				Name:    name,
+				Version: "5.10.0",
+			}, nil
+		},
+	}
+
+	cfg := &config.Config{
+		Unleash: config.UnleashConfig{
+			DefaultReleaseChannel: "stable",
+		},
+	}
+
+	handler, router := setupUnleashTestHandlerWithConfig(repo, channelRepo, cfg)
+	router.POST("/unleash", handler.CreateInstance)
+
+	// Request with only name - no log-level, no database-pool-max
+	requestBody := map[string]interface{}{
+		"name": "minimal-instance",
+	}
+	body, _ := json.Marshal(requestBody)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	// Should succeed - defaults are applied
+	assert.Equal(t, http.StatusCreated, w.Code, "Response: %s", w.Body.String())
+
+	created := repo.instances["minimal-instance"]
+	require.NotNil(t, created, "instance should be created")
+	assert.Equal(t, "stable", created.ReleaseChannelName, "should use default release channel")
+}
+
+func TestUpdateInstance_OptionalFieldsPreserveExisting(t *testing.T) {
+	// When updating an instance without specifying log-level or database-pool-max,
+	// the update should succeed (using defaults, not failing validation)
+	repo := NewMockUnleashRepository()
+	repo.instances["existing-instance"] = &domainUnleash.Instance{
+		Name:               "existing-instance",
+		Namespace:          "default",
+		ReleaseChannelName: "stable",
+		Version:            "5.10.0",
+		CreatedAt:          time.Now(),
+	}
+
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{
+				Name:    name,
+				Version: "5.10.0",
+			}, nil
+		},
+	}
+
+	handler, router := setupUnleashTestHandler(repo, channelRepo)
+	router.PUT("/unleash/:name", handler.UpdateInstance)
+
+	// Update with minimal fields - no log-level, no database-pool-max
+	requestBody := map[string]interface{}{
+		"enable-federation": true,
+		"allowed-teams":     "team1,team2",
+	}
+	body, _ := json.Marshal(requestBody)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("PUT", "/unleash/existing-instance", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	// Should succeed - defaults are applied for missing fields
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+}

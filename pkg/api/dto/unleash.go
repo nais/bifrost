@@ -49,9 +49,15 @@ type UnleashListResponse struct {
 // ToConfigBuilder converts a request DTO to a domain ConfigBuilder
 func (r *UnleashConfigRequest) ToConfigBuilder() *unleash.ConfigBuilder {
 	builder := unleash.NewConfigBuilder().
-		WithName(r.Name).
-		WithLogLevel(r.LogLevel).
-		WithDatabasePool(r.DatabasePoolMax, r.DatabasePoolIdleTimeoutMs)
+		WithName(r.Name)
+
+	if r.LogLevel != "" {
+		builder.WithLogLevel(r.LogLevel)
+	}
+
+	if r.DatabasePoolMax > 0 || r.DatabasePoolIdleTimeoutMs > 0 {
+		builder.WithDatabasePool(r.DatabasePoolMax, r.DatabasePoolIdleTimeoutMs)
+	}
 
 	if r.CustomVersion != "" {
 		builder.WithCustomVersion(r.CustomVersion)
