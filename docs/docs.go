@@ -342,7 +342,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "current_version": {
-                    "description": "Deprecated: Use 'image' instead. This field returns the same value as 'image'.",
+                    "description": "Current version extracted from the image tag",
                     "type": "string"
                 },
                 "description": {

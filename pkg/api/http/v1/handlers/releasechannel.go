@@ -26,6 +26,9 @@ type ReleaseChannelResponse struct {
 	Image     string `json:"image"`
 	CreatedAt string `json:"created_at"`
 
+	// Current version extracted from the image tag
+	CurrentVersion string `json:"current_version"`
+
 	// Legacy fields - kept for backwards compatibility
 	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
 	Version string `json:"version"`
@@ -35,8 +38,6 @@ type ReleaseChannelResponse struct {
 	Schedule string `json:"schedule,omitempty"`
 	// Deprecated: This field is reserved for future use and always returns an empty string.
 	Description string `json:"description,omitempty"`
-	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
-	CurrentVersion string `json:"current_version"`
 	// Deprecated: This field is reserved for future use and always returns an empty string.
 	LastUpdated string `json:"last_updated,omitempty"`
 }
@@ -108,9 +109,11 @@ func toReleaseChannelResponse(channel *releasechannel.Channel) ReleaseChannelRes
 		Image:     channel.Image,
 		CreatedAt: channel.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 
+		// Current version from release channel status
+		CurrentVersion: channel.Status.Version,
+
 		// Legacy fields - kept for backwards compatibility
-		Version:        channel.Image, // Deprecated: same as image
-		CurrentVersion: channel.Image, // Deprecated: same as image
+		Version: channel.Image, // Deprecated: same as image
 		// Type, Schedule, Description, LastUpdated left empty - reserved for future use
 	}
 }

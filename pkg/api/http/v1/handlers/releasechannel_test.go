@@ -107,7 +107,8 @@ func TestListChannels_Success(t *testing.T) {
 
 	// Verify legacy fields (backwards compatibility)
 	assert.Equal(t, response[0].Image, response[0].Version, "Version should equal Image for backwards compatibility")
-	assert.Equal(t, response[0].Image, response[0].CurrentVersion, "CurrentVersion should equal Image for backwards compatibility")
+	// CurrentVersion comes from status.version which is typically empty until set by the controller
+	assert.Equal(t, "", response[0].CurrentVersion, "CurrentVersion should be empty when status.version is not set")
 
 	// Verify second channel
 	assert.Equal(t, "rapid", response[1].Name)
@@ -206,7 +207,8 @@ func TestGetChannel_Success(t *testing.T) {
 	assert.Equal(t, "2024-01-01T00:00:00Z", response.CreatedAt)
 	// Legacy fields
 	assert.Equal(t, response.Image, response.Version)
-	assert.Equal(t, response.Image, response.CurrentVersion)
+	// CurrentVersion from status.version (typically empty until set by controller)
+	assert.Equal(t, "", response.CurrentVersion)
 }
 
 func TestGetChannel_WithoutLastReconciled(t *testing.T) {

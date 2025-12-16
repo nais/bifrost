@@ -77,6 +77,7 @@ func convertToChannel(crd *releasechannelv1.ReleaseChannel) *releasechannel.Chan
 		},
 		Status: releasechannel.ChannelStatus{
 			Phase:             string(crd.Status.Phase),
+			Version:           crd.Status.Version,
 			Instances:         crd.Status.Instances,
 			InstancesUpToDate: crd.Status.InstancesUpToDate,
 			Progress:          crd.Status.Progress,

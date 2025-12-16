@@ -49,6 +49,9 @@ type ChannelStatus struct {
 	// Phase is the current rollout phase (Idle, Canary, Rolling, Completed, Failed, etc.)
 	Phase string
 
+	// Version is the current version from the status
+	Version string
+
 	// Instances is the total number of instances managed by this channel
 	Instances int
 
