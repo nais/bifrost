@@ -26,19 +26,6 @@ type ReleaseChannelResponse struct {
 	Image     string `json:"image"`
 	CreatedAt string `json:"created_at"`
 
-	// Status fields from CRD
-	Phase             string `json:"phase"`
-	Instances         int    `json:"instances"`
-	InstancesUpToDate int    `json:"instances_up_to_date"`
-	Progress          int    `json:"progress"`
-	Completed         bool   `json:"completed"`
-	FailureReason     string `json:"failure_reason,omitempty"`
-	LastReconciled    string `json:"last_reconciled,omitempty"`
-
-	// Strategy fields from CRD
-	MaxParallel   int  `json:"max_parallel"`
-	CanaryEnabled bool `json:"canary_enabled"`
-
 	// Legacy fields - kept for backwards compatibility
 	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
 	Version string `json:"version"`
@@ -50,7 +37,7 @@ type ReleaseChannelResponse struct {
 	Description string `json:"description,omitempty"`
 	// Deprecated: Use 'image' instead. This field returns the same value as 'image'.
 	CurrentVersion string `json:"current_version"`
-	// Deprecated: Use 'last_reconciled' instead.
+	// Deprecated: This field is reserved for future use and always returns an empty string.
 	LastUpdated string `json:"last_updated,omitempty"`
 }
 
@@ -115,34 +102,15 @@ func (h *ReleaseChannelHandler) GetChannel(c *gin.Context) {
 }
 
 func toReleaseChannelResponse(channel *releasechannel.Channel) ReleaseChannelResponse {
-	var lastReconciled string
-	if !channel.Status.LastReconcileTime.IsZero() {
-		lastReconciled = channel.Status.LastReconcileTime.Format("2006-01-02T15:04:05Z07:00")
-	}
-
 	return ReleaseChannelResponse{
 		// Core fields
 		Name:      channel.Name,
 		Image:     channel.Image,
 		CreatedAt: channel.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 
-		// Status fields from CRD
-		Phase:             channel.Status.Phase,
-		Instances:         channel.Status.Instances,
-		InstancesUpToDate: channel.Status.InstancesUpToDate,
-		Progress:          channel.Status.Progress,
-		Completed:         channel.Status.Completed,
-		FailureReason:     channel.Status.FailureReason,
-		LastReconciled:    lastReconciled,
-
-		// Strategy fields from CRD
-		MaxParallel:   channel.Spec.MaxParallel,
-		CanaryEnabled: channel.Spec.CanaryEnabled,
-
 		// Legacy fields - kept for backwards compatibility
-		Version:        channel.Image,  // Deprecated: same as image
-		CurrentVersion: channel.Image,  // Deprecated: same as image
-		LastUpdated:    lastReconciled, // Deprecated: same as last_reconciled
-		// Type, Schedule, Description left empty - reserved for future use
+		Version:        channel.Image, // Deprecated: same as image
+		CurrentVersion: channel.Image, // Deprecated: same as image
+		// Type, Schedule, Description, LastUpdated left empty - reserved for future use
 	}
 }
