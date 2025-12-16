@@ -15,11 +15,37 @@ import (
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	domainUnleash "github.com/nais/bifrost/pkg/domain/unleash"
-	"github.com/nais/bifrost/pkg/infrastructure/cloudsql"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// MockDatabaseManager implements the DatabaseManager interface for testing
+type MockDatabaseManager struct{}
+
+func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) error {
+	return nil
+}
+
+func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, error) {
+	return "mock-password", nil
+}
+
+func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) error {
+	return nil
+}
+
+func (m *MockDatabaseManager) DeleteDatabase(ctx context.Context, name string) error {
+	return nil
+}
+
+func (m *MockDatabaseManager) DeleteDatabaseUser(ctx context.Context, name string) error {
+	return nil
+}
+
+func (m *MockDatabaseManager) DeleteSecret(ctx context.Context, name string) error {
+	return nil
+}
 
 // MockUnleashRepository mocks the unleash repository for testing
 type MockUnleashRepository struct {
@@ -86,15 +112,22 @@ func (m *MockUnleashRepository) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// setupUnleashTestHandler creates a test handler with default configuration.
+// It's a convenience wrapper around setupUnleashTestHandlerWithConfig.
 func setupUnleashTestHandler(repo *MockUnleashRepository, channelRepo *MockReleaseChannelRepository) (*UnleashHandler, *gin.Engine) {
+	return setupUnleashTestHandlerWithConfig(repo, channelRepo, &config.Config{})
+}
+
+// setupUnleashTestHandlerWithConfig creates a test handler with custom configuration.
+// Returns the handler and a configured gin router for testing HTTP endpoints.
+func setupUnleashTestHandlerWithConfig(repo *MockUnleashRepository, channelRepo *MockReleaseChannelRepository, cfg *config.Config) (*UnleashHandler, *gin.Engine) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	cfg := &config.Config{}
 	logger := logrus.New()
 	logger.SetLevel(logrus.ErrorLevel)
 
-	// Create a real cloudsql.Manager with nil dependencies (won't be used in these tests)
-	dbManager := cloudsql.NewManager(nil, nil, nil, cfg, logger)
+	// Create a mock database manager
+	dbManager := &MockDatabaseManager{}
 	service := unleash.NewService(repo, dbManager, cfg, logger)
 
 	handler := NewUnleashHandler(service, cfg, logger, channelRepo)
@@ -297,4 +330,204 @@ func TestUpdateInstance_ChannelNotFound(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	assert.Equal(t, "invalid_channel_switch", response.Error)
+}
+
+func TestCreateInstance_DefaultReleaseChannel(t *testing.T) {
+	tests := []struct {
+		name                   string
+		configDefaultChannel   string
+		requestCustomVersion   string
+		requestReleaseChannel  string
+		expectedReleaseChannel string
+		expectedCustomVersion  string
+	}{
+		{
+			name:                   "uses default channel when neither custom version nor channel specified",
+			configDefaultChannel:   "stable",
+			requestCustomVersion:   "",
+			requestReleaseChannel:  "",
+			expectedReleaseChannel: "stable",
+			expectedCustomVersion:  "",
+		},
+		{
+			name:                   "explicit custom version overrides default channel",
+			configDefaultChannel:   "stable",
+			requestCustomVersion:   "5.9.0",
+			requestReleaseChannel:  "",
+			expectedReleaseChannel: "",
+			expectedCustomVersion:  "5.9.0",
+		},
+		{
+			name:                   "explicit release channel overrides default channel",
+			configDefaultChannel:   "stable",
+			requestCustomVersion:   "",
+			requestReleaseChannel:  "rapid",
+			expectedReleaseChannel: "rapid",
+			expectedCustomVersion:  "",
+		},
+
+		{
+			name:                   "release channel takes precedence when both provided",
+			configDefaultChannel:   "stable",
+			requestCustomVersion:   "5.8.0",
+			requestReleaseChannel:  "rapid",
+			expectedReleaseChannel: "rapid",
+			expectedCustomVersion:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := NewMockUnleashRepository()
+			channelRepo := &MockReleaseChannelRepository{
+				GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+					return &releasechannel.Channel{
+						Name:    name,
+						Version: "5.10.0",
+					}, nil
+				},
+			}
+
+			cfg := &config.Config{
+				Unleash: config.UnleashConfig{
+					DefaultReleaseChannel: tt.configDefaultChannel,
+				},
+			}
+
+			handler, router := setupUnleashTestHandlerWithConfig(repo, channelRepo, cfg)
+			router.POST("/unleash", handler.CreateInstance)
+
+			requestBody := map[string]interface{}{
+				"name":              "test-instance",
+				"log-level":         "info",
+				"database-pool-max": 5,
+			}
+
+			if tt.requestCustomVersion != "" {
+				requestBody["custom-version"] = tt.requestCustomVersion
+			}
+
+			if tt.requestReleaseChannel != "" {
+				requestBody["release-channel-name"] = tt.requestReleaseChannel
+			}
+
+			body, _ := json.Marshal(requestBody)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusCreated, w.Code, "Response: %s", w.Body.String())
+
+			// Verify the created instance has the expected values
+			created := repo.instances["test-instance"]
+			require.NotNil(t, created, "instance should be created")
+			assert.Equal(t, tt.expectedReleaseChannel, created.ReleaseChannelName, "release channel mismatch")
+			assert.Equal(t, tt.expectedCustomVersion, created.CustomVersion, "custom version mismatch")
+		})
+	}
+}
+
+func TestCreateInstance_ExplicitVersionsNotAffectedByDefault(t *testing.T) {
+	// Ensure that when a user explicitly specifies a version or channel,
+	// the default release channel configuration doesn't interfere
+	repo := NewMockUnleashRepository()
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{
+				Name:    name,
+				Version: "5.10.0",
+			}, nil
+		},
+	}
+
+	cfg := &config.Config{
+		Unleash: config.UnleashConfig{
+			DefaultReleaseChannel: "stable",
+		},
+	}
+
+	handler, router := setupUnleashTestHandlerWithConfig(repo, channelRepo, cfg)
+	router.POST("/unleash", handler.CreateInstance)
+
+	t.Run("custom version is respected", func(t *testing.T) {
+		requestBody := map[string]interface{}{
+			"name":              "custom-version-instance",
+			"custom-version":    "4.20.0",
+			"log-level":         "info",
+			"database-pool-max": 5,
+		}
+		body, _ := json.Marshal(requestBody)
+
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		created := repo.instances["custom-version-instance"]
+		assert.Equal(t, "4.20.0", created.CustomVersion)
+		assert.Equal(t, "", created.ReleaseChannelName, "should not have release channel")
+	})
+
+	t.Run("explicit release channel is respected", func(t *testing.T) {
+		requestBody := map[string]interface{}{
+			"name":                 "explicit-channel-instance",
+			"release-channel-name": "rapid",
+			"log-level":            "info",
+			"database-pool-max":    5,
+		}
+		body, _ := json.Marshal(requestBody)
+
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		created := repo.instances["explicit-channel-instance"]
+		assert.Equal(t, "rapid", created.ReleaseChannelName)
+		assert.Equal(t, "", created.CustomVersion, "should not have custom version")
+	})
+}
+
+func TestCreateInstance_NoVersionSourceRejected(t *testing.T) {
+	// When no default release channel is configured and user provides neither
+	// custom version nor release channel, creation should be rejected
+	repo := NewMockUnleashRepository()
+	channelRepo := &MockReleaseChannelRepository{}
+
+	cfg := &config.Config{
+		Unleash: config.UnleashConfig{
+			DefaultReleaseChannel: "", // No default configured
+		},
+	}
+
+	handler, router := setupUnleashTestHandlerWithConfig(repo, channelRepo, cfg)
+	router.POST("/unleash", handler.CreateInstance)
+
+	requestBody := map[string]interface{}{
+		"name":              "no-version-instance",
+		"log-level":         "info",
+		"database-pool-max": 5,
+		// No custom-version and no release-channel-name
+	}
+	body, _ := json.Marshal(requestBody)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var response ErrorResponse
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.Equal(t, "no_version_source", response.Error)
+	assert.Contains(t, response.Message, "Must specify either custom-version or release-channel-name")
+
+	// Instance should not have been created
+	_, exists := repo.instances["no-version-instance"]
+	assert.False(t, exists, "instance should not have been created")
 }

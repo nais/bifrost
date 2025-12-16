@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	v0handlers "github.com/nais/bifrost/pkg/api/http/v0/handlers"
@@ -144,6 +145,24 @@ func setupRouter(config *config.Config, logger *logrus.Logger, unleashService un
 	return router
 }
 
+// validateDefaultReleaseChannel checks if the configured default release channel exists in Kubernetes.
+// If no default channel is configured, it returns nil (no validation needed).
+// If a default is configured but not found, it returns an error to prevent server startup.
+// This ensures instances can't be created with a non-existent default channel.
+func validateDefaultReleaseChannel(ctx context.Context, config *config.Config, repo releasechannel.Repository, logger *logrus.Logger) error {
+	if config.Unleash.DefaultReleaseChannel == "" {
+		return nil
+	}
+
+	_, err := repo.Get(ctx, config.Unleash.DefaultReleaseChannel)
+	if err != nil {
+		return fmt.Errorf("default release channel %q not found: %w", config.Unleash.DefaultReleaseChannel, err)
+	}
+
+	logger.Infof("Validated default release channel: %s", config.Unleash.DefaultReleaseChannel)
+	return nil
+}
+
 func Run(config *config.Config) {
 	logger := initLogger()
 
@@ -167,6 +186,13 @@ func Run(config *config.Config) {
 
 	// Create release channel repository
 	releaseChannelRepo := kubernetes.NewReleaseChannelRepository(kubeClient, config.Unleash.InstanceNamespace)
+
+	// Validate default release channel if configured
+	validateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := validateDefaultReleaseChannel(validateCtx, config, releaseChannelRepo, logger); err != nil {
+		logger.Fatal(err)
+	}
 
 	router := setupRouter(config, logger, unleashServiceV0, unleashServiceV1, releaseChannelRepo)
 

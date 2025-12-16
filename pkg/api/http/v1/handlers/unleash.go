@@ -12,18 +12,17 @@ import (
 	"github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
-	"github.com/nais/bifrost/pkg/infrastructure/github"
 	"github.com/sirupsen/logrus"
 )
 
 type UnleashHandler struct {
-	service            *unleash.Service
+	service            unleash.IService
 	config             *config.Config
 	logger             *logrus.Logger
 	releaseChannelRepo releasechannel.Repository
 }
 
-func NewUnleashHandler(service *unleash.Service, config *config.Config, logger *logrus.Logger, releaseChannelRepo releasechannel.Repository) *UnleashHandler {
+func NewUnleashHandler(service unleash.IService, config *config.Config, logger *logrus.Logger, releaseChannelRepo releasechannel.Repository) *UnleashHandler {
 	return &UnleashHandler{
 		service:            service,
 		config:             config,
@@ -92,11 +91,18 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 
 	builder := req.ToConfigBuilder()
 	if req.CustomVersion == "" && req.ReleaseChannelName == "" {
-		unleashVersions, err := github.UnleashVersions()
-		if err != nil {
-			h.logger.WithContext(ctx).WithError(err).Warn("Failed to fetch Unleash versions")
+		if h.config.Unleash.DefaultReleaseChannel != "" {
+			builder.WithReleaseChannel(h.config.Unleash.DefaultReleaseChannel)
+		} else {
+			// No default channel configured and no explicit version provided
+			h.logger.WithContext(ctx).WithField("name", req.Name).Warn("Instance creation rejected: must specify custom-version, release-channel-name, or configure a default release channel")
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Error:      "no_version_source",
+				Message:    "Must specify either custom-version or release-channel-name, or configure a default release channel",
+				StatusCode: http.StatusBadRequest,
+			})
+			return
 		}
-		builder.SetDefaultVersionIfNeeded(unleashVersions)
 	}
 
 	builder.MergeTeamsAndNamespaces()

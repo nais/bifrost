@@ -80,6 +80,7 @@ type UnleashConfig struct {
 	TeamsApiURL                 string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL,required"`
 	TeamsApiSecretName          string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
 	TeamsApiSecretTokenKey      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
+	DefaultReleaseChannel       string `env:"BIFROST_UNLEASH_DEFAULT_RELEASE_CHANNEL"`
 }
 
 type Config struct {
