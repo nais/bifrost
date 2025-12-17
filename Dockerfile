@@ -14,7 +14,8 @@ RUN go mod download
 # Copy the go source
 COPY . .
 
-# Generate OpenAPI code
+# Install oapi-codegen and generate OpenAPI code
+RUN go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
 RUN go generate ./...
 
 # Build
