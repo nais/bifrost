@@ -14,9 +14,8 @@ RUN go mod download
 # Copy the go source
 COPY . .
 
-# Generate Swagger documentation
-RUN go install github.com/swaggo/swag/cmd/swag@latest
-RUN swag init --parseDependency --parseInternal
+# Generate OpenAPI code
+RUN go generate ./...
 
 # Build
 # the GOARCH has not a default value to allow the binary be built according to the host where the command
@@ -30,7 +29,6 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o bi
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/bifrost .
-COPY --from=builder /workspace/docs ./docs
 USER 65532:65532
 
 ENTRYPOINT ["/bifrost"]

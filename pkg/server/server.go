@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	v1handlers "github.com/nais/bifrost/pkg/api/http/v1/handlers"
+	"github.com/nais/bifrost/pkg/api/generated"
+	v1 "github.com/nais/bifrost/pkg/api/http/v1"
 	unleashapp "github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
@@ -16,16 +17,12 @@ import (
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	admin "google.golang.org/api/sqladmin/v1beta4"
 	"k8s.io/apimachinery/pkg/runtime"
 	client_go_scheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
-
-	_ "github.com/nais/bifrost/docs" // Import generated docs
 )
 
 func initGoogleClients(ctx context.Context) (*admin.InstancesService, *admin.DatabasesService, *admin.UsersService, error) {
@@ -98,33 +95,29 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 	router := gin.Default()
 	gin.DefaultWriter = logger.Writer()
 
-	// v1 handlers
-	v1Handlers := v1handlers.NewUnleashHandler(v1Service, config, logger, releaseChannelRepo)
-	v1ChannelHandlers := v1handlers.NewReleaseChannelHandler(releaseChannelRepo, logger)
-
-	// Swagger UI
-	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
 	// Health check
 	router.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "OK")
 	})
 
-	// v1 API routes
-	v1 := router.Group("/v1")
-	v1.Use(apiVersionMiddleware("v1"))
-	{
-		// Unleash instances
-		v1.GET("/unleash", v1Handlers.ListInstances)
-		v1.POST("/unleash", v1Handlers.CreateInstance)
-		v1.GET("/unleash/:name", v1Handlers.GetInstance)
-		v1.PUT("/unleash/:name", v1Handlers.UpdateInstance)
-		v1.DELETE("/unleash/:name", v1Handlers.DeleteInstance)
+	// Serve OpenAPI specification (JSON format from embedded spec)
+	router.GET("/openapi.json", func(c *gin.Context) {
+		swagger, err := generated.GetSwagger()
+		if err != nil {
+			logger.WithError(err).Error("Failed to get OpenAPI spec")
+			c.JSON(500, gin.H{"error": "failed to get spec"})
+			return
+		}
+		c.JSON(200, swagger)
+	})
 
-		// Release channels
-		v1.GET("/releasechannels", v1ChannelHandlers.ListChannels)
-		v1.GET("/releasechannels/:name", v1ChannelHandlers.GetChannel)
-	}
+	// Create OpenAPI handler
+	openAPIHandler := v1.NewOpenAPIHandler(v1Service, config, logger, releaseChannelRepo)
+
+	// Register v1 API routes with OpenAPI middleware
+	v1Group := router.Group("/v1")
+	v1Group.Use(apiVersionMiddleware("v1"))
+	generated.RegisterHandlers(v1Group, openAPIHandler)
 
 	return router
 }

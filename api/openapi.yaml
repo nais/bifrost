@@ -1,0 +1,428 @@
+openapi: 3.0.3
+info:
+  title: Bifrost API
+  description: |
+    Bifrost API for managing Unleash feature flag server instances and release channels in Kubernetes.
+
+    This API provides endpoints for creating, reading, updating, and deleting Unleash instances,
+    as well as querying available release channels for version management.
+  version: "1.0"
+  contact:
+    name: NAIS Team
+    url: https://github.com/nais/bifrost
+  license:
+    name: MIT
+    url: https://github.com/nais/bifrost/blob/main/LICENSE
+
+servers:
+  - url: /v1
+    description: API v1
+
+tags:
+  - name: unleash-v1
+    description: Unleash instance management operations
+  - name: release-channels
+    description: Release channel operations for version management
+
+paths:
+  /unleash:
+    get:
+      summary: List all Unleash instances
+      description: Returns a list of all Unleash feature flag server instances as Kubernetes CRDs
+      operationId: listInstances
+      tags:
+        - unleash-v1
+      responses:
+        '200':
+          description: Successfully retrieved list of instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Unleash'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Create a new Unleash instance
+      description: |
+        Creates a new Unleash feature flag server instance with database and credentials.
+        Returns the Kubernetes CRD.
+      operationId: createInstance
+      tags:
+        - unleash-v1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnleashConfigRequest'
+      responses:
+        '201':
+          description: Successfully created instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Unleash'
+        '400':
+          description: Invalid request or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /unleash/{name}:
+    get:
+      summary: Get Unleash instance by name
+      description: Returns details of a specific Unleash instance as Kubernetes CRD
+      operationId: getInstance
+      tags:
+        - unleash-v1
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Instance name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Unleash'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      summary: Update an existing Unleash instance
+      description: |
+        Updates configuration of an existing Unleash instance.
+        Preserves federation settings if not specified. Returns the Kubernetes CRD.
+      operationId: updateInstance
+      tags:
+        - unleash-v1
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Instance name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnleashConfigRequest'
+      responses:
+        '200':
+          description: Successfully updated instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Unleash'
+        '400':
+          description: Invalid request or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Delete an Unleash instance
+      description: Deletes an existing Unleash instance and its associated database and credentials
+      operationId: deleteInstance
+      tags:
+        - unleash-v1
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Instance name
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Successfully deleted
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /releasechannels:
+    get:
+      summary: List all release channels
+      description: Returns a list of all available release channels for Unleash version management
+      operationId: listChannels
+      tags:
+        - release-channels
+      responses:
+        '200':
+          description: Successfully retrieved list of release channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReleaseChannelResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /releasechannels/{name}:
+    get:
+      summary: Get a release channel by name
+      description: Returns details of a specific release channel
+      operationId: getChannel
+      tags:
+        - release-channels
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Release channel name
+          schema:
+            type: string
+            example: stable
+      responses:
+        '200':
+          description: Successfully retrieved release channel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseChannelResponse'
+        '404':
+          description: Release channel not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    UnleashConfigRequest:
+      type: object
+      description: Request body for creating or updating an Unleash instance
+      properties:
+        name:
+          type: string
+          description: Name of the Unleash instance
+          example: my-unleash
+        release_channel_name:
+          type: string
+          description: Name of the release channel to use for automatic version updates
+          example: stable
+        enable_federation:
+          type: boolean
+          description: Enable federation support (always enabled for managed instances)
+          example: true
+        allowed_teams:
+          type: string
+          description: Comma-separated list of allowed teams for federation
+          example: team-a,team-b
+        allowed_clusters:
+          type: string
+          description: Comma-separated list of allowed clusters for federation
+          example: dev-gcp,prod-gcp
+        log_level:
+          type: string
+          description: Log level for the Unleash instance
+          enum: [debug, info, warn, error, fatal]
+          example: info
+        database_pool_max:
+          type: integer
+          description: Maximum number of database connections
+          example: 10
+        database_pool_idle_timeout_ms:
+          type: integer
+          description: Database connection idle timeout in milliseconds
+          example: 30000
+
+    ReleaseChannelResponse:
+      type: object
+      description: Release channel information for Unleash version management
+      required:
+        - name
+        - image
+        - created_at
+        - current_version
+      properties:
+        name:
+          type: string
+          description: Unique identifier of the release channel (e.g., "stable", "rapid")
+          example: stable
+        image:
+          type: string
+          description: Full container image reference including tag
+          example: quay.io/unleash/unleash-server:6.3.0
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the release channel was created (RFC3339 format)
+          example: "2024-01-01T00:00:00Z"
+        current_version:
+          type: string
+          description: Current version tracked by the release channel status
+          example: "6.3.0"
+        last_updated:
+          type: string
+          format: date-time
+          description: Timestamp when the release channel image was last changed (RFC3339 format)
+          example: "2024-03-15T10:30:00Z"
+        version:
+          type: string
+          description: |
+            **Deprecated:** Use 'image' instead. This field returns the same value as 'image'.
+          deprecated: true
+          example: quay.io/unleash/unleash-server:6.3.0
+        type:
+          type: string
+          description: |
+            **Deprecated:** This field is reserved for future use and always returns an empty string.
+          deprecated: true
+        schedule:
+          type: string
+          description: |
+            **Deprecated:** This field is reserved for future use and always returns an empty string.
+          deprecated: true
+        description:
+          type: string
+          description: |
+            **Deprecated:** This field is reserved for future use and always returns an empty string.
+          deprecated: true
+
+    ErrorResponse:
+      type: object
+      description: Standard error response structure
+      required:
+        - error
+        - message
+        - status_code
+      properties:
+        error:
+          type: string
+          description: Error code/identifier
+          example: not_found
+        message:
+          type: string
+          description: Human-readable error message
+          example: Unleash instance not found
+        details:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional error details
+          example:
+            instance: my-unleash
+        status_code:
+          type: integer
+          description: HTTP status code
+          example: 404
+
+    Unleash:
+      type: object
+      description: |
+        Unleash CRD (Custom Resource Definition) representing an Unleash feature flag server instance.
+        This is a Kubernetes resource managed by the unleasherator operator.
+      x-kubernetes-resource: true
+      properties:
+        apiVersion:
+          type: string
+          example: unleash.nais.io/v1
+        kind:
+          type: string
+          example: Unleash
+        metadata:
+          type: object
+          properties:
+            name:
+              type: string
+              example: my-unleash
+            namespace:
+              type: string
+              example: my-team
+            creationTimestamp:
+              type: string
+              format: date-time
+              example: "2024-01-01T00:00:00Z"
+        spec:
+          type: object
+          description: Desired state of the Unleash instance
+          properties:
+            releaseChannel:
+              type: string
+              description: Name of the release channel for automatic version updates
+              example: stable
+            customImage:
+              type: string
+              description: Custom container image override
+              example: quay.io/unleash/unleash-server:6.3.0
+            federation:
+              type: object
+              description: Federation configuration
+              properties:
+                enabled:
+                  type: boolean
+                  example: true
+                allowedTeams:
+                  type: array
+                  items:
+                    type: string
+                  example: ["team-a", "team-b"]
+                allowedClusters:
+                  type: array
+                  items:
+                    type: string
+                  example: ["dev-gcp", "prod-gcp"]
+        status:
+          type: object
+          description: Observed state of the Unleash instance
+          properties:
+            version:
+              type: string
+              description: Current running version
+              example: "6.3.0"
+            connected:
+              type: boolean
+              description: Connection status to database
+              example: true
