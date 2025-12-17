@@ -54,8 +54,8 @@ definitions:
         example: quay.io/unleash/unleash-server:6.3.0
         type: string
       last_updated:
-        description: LastUpdated is the timestamp when the release channel was last
-          reconciled (RFC3339 format)
+        description: LastUpdated is the timestamp when the release channel image was
+          last changed (RFC3339 format)
         example: "2024-03-15T10:30:00Z"
         type: string
       name:

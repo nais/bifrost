@@ -352,7 +352,7 @@
                     "example": "quay.io/unleash/unleash-server:6.3.0"
                 },
                 "last_updated": {
-                    "description": "LastUpdated is the timestamp when the release channel was last reconciled (RFC3339 format)",
+                    "description": "LastUpdated is the timestamp when the release channel image was last changed (RFC3339 format)",
                     "type": "string",
                     "example": "2024-03-15T10:30:00Z"
                 },

@@ -33,7 +33,7 @@ type ReleaseChannelResponse struct {
 	// CurrentVersion is the current version tracked by the release channel status
 	CurrentVersion string `json:"current_version" example:"6.3.0"`
 
-	// LastUpdated is the timestamp when the release channel was last reconciled (RFC3339 format)
+	// LastUpdated is the timestamp when the release channel image was last changed (RFC3339 format)
 	LastUpdated string `json:"last_updated,omitempty" example:"2024-03-15T10:30:00Z"`
 
 	// Legacy fields - kept for backwards compatibility
@@ -109,8 +109,8 @@ func (h *ReleaseChannelHandler) GetChannel(c *gin.Context) {
 
 func toReleaseChannelResponse(channel *releasechannel.Channel) ReleaseChannelResponse {
 	lastUpdated := ""
-	if !channel.Status.LastReconcileTime.IsZero() {
-		lastUpdated = channel.Status.LastReconcileTime.Time.Format("2006-01-02T15:04:05Z07:00")
+	if !channel.Status.LastImageChangeTime.IsZero() {
+		lastUpdated = channel.Status.LastImageChangeTime.Time.Format("2006-01-02T15:04:05Z07:00")
 	}
 
 	return ReleaseChannelResponse{

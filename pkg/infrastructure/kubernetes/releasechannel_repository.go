@@ -67,6 +67,11 @@ func convertToChannel(crd *releasechannelv1.ReleaseChannel) *releasechannel.Chan
 		lastReconcileTime = *crd.Status.LastReconcileTime
 	}
 
+	var lastImageChangeTime metav1.Time
+	if crd.Status.LastImageChangeTime != nil {
+		lastImageChangeTime = *crd.Status.LastImageChangeTime
+	}
+
 	return &releasechannel.Channel{
 		Name:      crd.Name,
 		Image:     string(crd.Spec.Image),
@@ -76,15 +81,16 @@ func convertToChannel(crd *releasechannelv1.ReleaseChannel) *releasechannel.Chan
 			CanaryEnabled: crd.Spec.Strategy.Canary.Enabled,
 		},
 		Status: releasechannel.ChannelStatus{
-			Phase:             string(crd.Status.Phase),
-			Version:           crd.Status.Version,
-			Instances:         crd.Status.Instances,
-			InstancesUpToDate: crd.Status.InstancesUpToDate,
-			Progress:          crd.Status.Progress,
-			Completed:         crd.Status.Rollout,
-			FailureReason:     crd.Status.FailureReason,
-			LastReconcileTime: lastReconcileTime,
-			Conditions:        crd.Status.Conditions,
+			Phase:               string(crd.Status.Phase),
+			Version:             crd.Status.Version,
+			Instances:           crd.Status.Instances,
+			InstancesUpToDate:   crd.Status.InstancesUpToDate,
+			Progress:            crd.Status.Progress,
+			Completed:           crd.Status.Rollout,
+			FailureReason:       crd.Status.FailureReason,
+			LastReconcileTime:   lastReconcileTime,
+			LastImageChangeTime: lastImageChangeTime,
+			Conditions:          crd.Status.Conditions,
 		},
 	}
 }
