@@ -3,6 +3,7 @@ linters-settings:
     checks:
       - "all"
       - "-SA1019" # Disable deprecation warnings - we intentionally use deprecated fields for backwards compatibility
+      - "-ST1005" # Disable capitalized error string check - generated code from oapi-codegen violates this
 
 issues:
   exclude-rules:
@@ -11,3 +12,10 @@ issues:
       linters:
         - staticcheck
       text: "SA1019"
+
+    # Exclude generated OpenAPI code from all linting checks
+    - path: pkg/api/generated/
+      linters:
+        - staticcheck
+        - golint
+        - stylecheck

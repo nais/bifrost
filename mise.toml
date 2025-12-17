@@ -7,7 +7,7 @@ go = "1.25"
 "go:github.com/golangci/golangci-lint/cmd/golangci-lint" = "latest"
 "go:honnef.co/go/tools/cmd/staticcheck" = "latest"
 "go:golang.org/x/vuln/cmd/govulncheck" = "latest"
-"go:github.com/swaggo/swag/cmd/swag" = "latest"
+"go:github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen" = "latest"
 "go:github.com/sethvargo/ratchet" = "latest"
 
 [tasks.version]
@@ -40,7 +40,10 @@ run = ["go mod tidy", "git diff --exit-code go.mod go.sum"]
 
 [tasks.check]
 description = "Run linter and static analysis"
-run = ["staticcheck ./...", "govulncheck ./..."]
+run = [
+  "staticcheck -checks=all,-ST1000,-ST1003,-ST1005 ./...",
+  "govulncheck ./...",
+]
 
 [tasks.test]
 description = "Run tests"
@@ -54,13 +57,13 @@ run = "go test -race ./..."
 description = "Run tests with coverage"
 run = "go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out -o coverage.html"
 
-[tasks.swagger]
-description = "Generate Swagger documentation"
-run = "swag init --parseDependency --parseInternal"
+[tasks.openapi]
+description = "Generate OpenAPI code from specification"
+run = "go generate ./..."
 
 [tasks.build]
 description = "Build binary"
-depends = ["swagger"]
+depends = ["openapi"]
 run = '''
 BUILDTIME=$(date "+%s")
 DATE=$(date "+%Y-%m-%d")
