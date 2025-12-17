@@ -109,8 +109,8 @@ func TestListChannels_Success(t *testing.T) {
 	assert.Equal(t, response[0].Image, response[0].Version, "Version should equal Image for backwards compatibility")
 	// CurrentVersion comes from status.version which is typically empty until set by the controller
 	assert.Equal(t, "", response[0].CurrentVersion, "CurrentVersion should be empty when status.version is not set")
-	// LastUpdated comes from status.lastReconcileTime
-	assert.Equal(t, "2024-03-15T10:30:00Z", response[0].LastUpdated, "LastUpdated should be populated from lastReconcileTime")
+	// LastUpdated comes from status.lastImageChangeTime
+	assert.Equal(t, "2024-03-15T10:30:00Z", response[0].LastUpdated, "LastUpdated should be populated from lastImageChangeTime")
 
 	// Verify second channel
 	assert.Equal(t, "rapid", response[1].Name)
@@ -179,12 +179,12 @@ func TestGetChannel_Success(t *testing.T) {
 					CanaryEnabled: false,
 				},
 				Status: releasechannel.ChannelStatus{
-					Phase:             "Completed",
-					Instances:         10,
-					InstancesUpToDate: 10,
-					Progress:          100,
-					Completed:         true,
-					LastReconcileTime: metav1.NewTime(time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)),
+					Phase:               "Completed",
+					Instances:           10,
+					InstancesUpToDate:   10,
+					Progress:            100,
+					Completed:           true,
+					LastImageChangeTime: metav1.NewTime(time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)),
 				},
 			}, nil
 		},
@@ -226,10 +226,10 @@ func TestGetChannel_WithoutLastReconciled(t *testing.T) {
 					CanaryEnabled: true,
 				},
 				Status: releasechannel.ChannelStatus{
-					Phase:             "Idle",
-					Instances:         0,
-					Progress:          0,
-					LastReconcileTime: metav1.Time{}, // Zero time
+					Phase:               "Idle",
+					Instances:           0,
+					Progress:            0,
+					LastImageChangeTime: metav1.Time{}, // Zero time
 				},
 			}, nil
 		},
@@ -251,7 +251,7 @@ func TestGetChannel_WithoutLastReconciled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "testing", response.Name)
 	assert.Equal(t, "quay.io/unleash/unleash-server:5.13.0-rc.1", response.Image)
-	assert.Empty(t, response.LastUpdated, "LastUpdated should be empty when lastReconcileTime is zero")
+	assert.Empty(t, response.LastUpdated, "LastUpdated should be empty when lastImageChangeTime is zero")
 }
 
 func TestGetChannel_NotFound(t *testing.T) {

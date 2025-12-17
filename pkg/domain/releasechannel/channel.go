@@ -70,6 +70,9 @@ type ChannelStatus struct {
 	// LastReconcileTime is when the channel was last reconciled
 	LastReconcileTime metav1.Time
 
+	// LastImageChangeTime is when spec.image was last changed
+	LastImageChangeTime metav1.Time
+
 	// Conditions represent the channel's operational state
 	Conditions []metav1.Condition
 }
