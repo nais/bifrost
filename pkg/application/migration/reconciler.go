@@ -70,6 +70,12 @@ func NewReconciler(
 // It will migrate all instances with custom versions to the target release channel.
 // The migration is deterministic: instances are processed in alphabetical order.
 func (r *Reconciler) Start(ctx context.Context) {
+	// Defensive check: don't run if migration is not enabled
+	if !r.config.Unleash.MigrationEnabled {
+		r.logger.Debug("Migration reconciler called but migration is not enabled, skipping")
+		return
+	}
+
 	r.logger.Info("Starting release channel migration reconciler")
 
 	// Validate target channel exists

@@ -250,6 +250,25 @@ func newTestReconciler(repo UnleashCRDRepository, channelRepo releasechannel.Rep
 	return r
 }
 
+func TestReconciler_Start_MigrationDisabled(t *testing.T) {
+	repo := NewMockUnleashCRDRepository()
+	repo.AddInstance("test-instance", "6.2.0", "", true)
+
+	channelRepo := NewMockReleaseChannelRepository()
+	channelRepo.AddChannel("stable", "unleash/unleash-server:6.3.0")
+
+	cfg := newTestConfig(false, "stable", testHealthTimeout) // Migration disabled
+	logger := newTestLogger()
+
+	reconciler := newTestReconciler(repo, channelRepo, cfg, logger)
+
+	ctx := context.Background()
+	reconciler.Start(ctx)
+
+	// Should not have made any update calls when migration is disabled
+	assert.Empty(t, repo.updateCalls)
+}
+
 func TestReconciler_Start_NoTargetChannel(t *testing.T) {
 	repo := NewMockUnleashCRDRepository()
 	channelRepo := NewMockReleaseChannelRepository()
