@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nais/bifrost/pkg/api/generated"
 	v1 "github.com/nais/bifrost/pkg/api/http/v1"
+	"github.com/nais/bifrost/pkg/application/migration"
 	unleashapp "github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
@@ -167,6 +170,34 @@ func Run(config *config.Config) {
 	if err := validateDefaultReleaseChannel(validateCtx, config, releaseChannelRepo, logger); err != nil {
 		logger.Fatal(err)
 	}
+
+	// Start migration reconciler in background if enabled
+	var migrationCancel context.CancelFunc
+	if config.Unleash.MigrationEnabled {
+		var migrationCtx context.Context
+		migrationCtx, migrationCancel = context.WithCancel(context.Background())
+
+		reconciler := migration.NewReconciler(
+			repo.(migration.UnleashCRDRepository),
+			releaseChannelRepo,
+			config,
+			logger,
+		)
+
+		go reconciler.Start(migrationCtx)
+		logger.Info("Migration reconciler started in background")
+	}
+
+	// Setup signal handler to gracefully shutdown migration reconciler
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+		<-sigChan
+		if migrationCancel != nil {
+			logger.Info("Shutting down migration reconciler")
+			migrationCancel()
+		}
+	}()
 
 	router := setupRouter(config, logger, unleashService, releaseChannelRepo)
 
