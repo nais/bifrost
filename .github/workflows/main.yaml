@@ -22,7 +22,7 @@ jobs:
     secrets:
       NAIS_IO_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.NAIS_IO_WORKLOAD_IDENTITY_PROVIDER }}
     with:
-      mise-tasks: '["tidy-check", "fmt-check", "lint", "vet", "check", "test-race"]'
+      mise-tasks: '["tidy-check", "fmt-check", "generate-check", "lint", "vet", "check", "test-race"]'
       builds-docker: true
       builds-chart: true
       deploys-to-fasit: true
