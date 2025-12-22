@@ -37,6 +37,22 @@ values:
     displayName: Default release channel for new instances
     config:
       type: string
+  backend.unleash.migration.enabled:
+    displayName: Enable migration from custom versions to release channel
+    config:
+      type: bool
+  backend.unleash.migration.targetChannel:
+    displayName: Target release channel for migration
+    config:
+      type: string
+  backend.unleash.migration.healthTimeout:
+    displayName: Health check timeout for migration (e.g. 5m)
+    config:
+      type: string
+  backend.unleash.migration.delay:
+    displayName: Delay between instance migrations (e.g. 30s)
+    config:
+      type: string
   backend.unleash.googleServiceAccountEmail:
     displayName: Biforst unleash Google service account email
     computed:

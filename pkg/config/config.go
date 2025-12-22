@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -81,6 +82,12 @@ type UnleashConfig struct {
 	TeamsApiSecretName          string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
 	TeamsApiSecretTokenKey      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
 	DefaultReleaseChannel       string `env:"BIFROST_UNLEASH_DEFAULT_RELEASE_CHANNEL"`
+
+	// Migration settings for transitioning custom versions to release channels
+	MigrationEnabled       bool          `env:"BIFROST_UNLEASH_MIGRATION_ENABLED,default=false"`
+	MigrationTargetChannel string        `env:"BIFROST_UNLEASH_MIGRATION_TARGET_CHANNEL"`
+	MigrationHealthTimeout time.Duration `env:"BIFROST_UNLEASH_MIGRATION_HEALTH_TIMEOUT,default=5m"`
+	MigrationDelay         time.Duration `env:"BIFROST_UNLEASH_MIGRATION_DELAY,default=30s"`
 }
 
 type Config struct {

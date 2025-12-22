@@ -39,6 +39,14 @@ backend:
     # Set via Fasit per environment once ReleaseChannel CRDs are available
     defaultReleaseChannel: ""
 
+    # Migration settings for transitioning custom versions to release channels
+    # Enable this to migrate existing instances with custom versions to a release channel
+    migration:
+      enabled: false
+      targetChannel: ""
+      healthTimeout: "5m"
+      delay: "30s"
+
     # Unleash teams config
     teamsApiUrl: https://console.nav.cloud.nais.io/graphql
     # teamsApiToken:  # mapped in fasit
