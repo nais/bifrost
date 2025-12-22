@@ -61,6 +61,22 @@ run = "go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.
 description = "Generate OpenAPI code from specification"
 run = "go generate ./..."
 
+[tasks.openapi-client]
+description = "Generate OpenAPI client for external consumers"
+run = "oapi-codegen --config api/oapi-codegen-client.yaml api/openapi.yaml"
+
+[tasks.generate]
+description = "Generate all code"
+depends = ["openapi", "openapi-client"]
+
+[tasks.generate-check]
+description = "Check if generated code is up to date"
+run = [
+  "go generate ./...",
+  "oapi-codegen --config api/oapi-codegen-client.yaml api/openapi.yaml",
+  "git diff --exit-code",
+]
+
 [tasks.build]
 description = "Build binary"
 depends = ["openapi"]
@@ -94,4 +110,4 @@ run = "ratchet lint .github/workflows/*.yaml"
 
 [tasks.all]
 description = "Run all checks and build"
-depends = ["tidy", "fmt", "lint", "vet", "check", "test", "build"]
+depends = ["tidy", "fmt", "generate", "lint", "vet", "check", "test", "build"]
