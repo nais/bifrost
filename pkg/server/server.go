@@ -117,10 +117,9 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 	// Create OpenAPI handler
 	openAPIHandler := v1.NewOpenAPIHandler(v1Service, config, logger, releaseChannelRepo)
 
-	// Register v1 API routes with OpenAPI middleware
-	v1Group := router.Group("/v1")
-	v1Group.Use(apiVersionMiddleware("v1"))
-	generated.RegisterHandlers(v1Group, openAPIHandler)
+	// Register API routes (paths already include /v1 prefix)
+	router.Use(apiVersionMiddleware("v1"))
+	generated.RegisterHandlers(router, openAPIHandler)
 
 	return router
 }
