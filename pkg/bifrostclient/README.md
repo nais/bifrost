@@ -23,7 +23,7 @@ import (
 func main() {
   ctx := context.Background()
 
-  client, err := bifrostclient.NewClientWithResponses("https://bifrost.example.com/v1")
+  client, err := bifrostclient.NewClientWithResponses("https://bifrost.example.com")
   if err != nil {
     log.Fatal(err)
   }
