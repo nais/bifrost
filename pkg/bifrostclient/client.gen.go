@@ -98,8 +98,11 @@ type Unleash struct {
 			Enabled         *bool     `json:"enabled,omitempty"`
 		} `json:"federation,omitempty"`
 
-		// ReleaseChannel Name of the release channel for automatic version updates
-		ReleaseChannel *string `json:"releaseChannel,omitempty"`
+		// ReleaseChannel Release channel configuration for automatic version updates
+		ReleaseChannel *struct {
+			// Name Name of the release channel
+			Name *string `json:"name,omitempty"`
+		} `json:"releaseChannel,omitempty"`
 	} `json:"spec,omitempty"`
 
 	// Status Observed state of the Unleash instance

@@ -152,19 +152,6 @@ func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) err
 		return fmt.Errorf("failed to create unleash instance: %w", err)
 	}
 
-	versionSource := "default"
-	if cfg.CustomVersion != "" {
-		versionSource = "custom"
-	} else if cfg.ReleaseChannelName != "" {
-		versionSource = "releaseChannel"
-	}
-
-	r.logger.WithContext(ctx).WithFields(logrus.Fields{
-		"operation":      "create_unleash",
-		"instance":       cfg.Name,
-		"version_source": versionSource,
-	}).Info("Created Unleash instance")
-
 	return nil
 }
 
