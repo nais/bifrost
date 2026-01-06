@@ -94,9 +94,60 @@ func apiVersionMiddleware(version string) gin.HandlerFunc {
 	}
 }
 
+// jsonLoggerMiddleware returns a gin middleware that logs requests as JSON using logrus.
+// It skips logging for specified paths (like health checks) to reduce noise.
+func jsonLoggerMiddleware(logger *logrus.Logger, skipPaths []string) gin.HandlerFunc {
+	skipPathSet := make(map[string]struct{}, len(skipPaths))
+	for _, path := range skipPaths {
+		skipPathSet[path] = struct{}{}
+	}
+
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+
+		c.Next()
+
+		// Skip logging for specified paths
+		if _, skip := skipPathSet[path]; skip {
+			return
+		}
+
+		latency := time.Since(start)
+		clientIP := c.ClientIP()
+		method := c.Request.Method
+		statusCode := c.Writer.Status()
+		bodySize := c.Writer.Size()
+
+		if raw != "" {
+			path = path + "?" + raw
+		}
+
+		entry := logger.WithFields(logrus.Fields{
+			"status":     statusCode,
+			"method":     method,
+			"path":       path,
+			"latency":    latency.String(),
+			"latency_ms": latency.Milliseconds(),
+			"client_ip":  clientIP,
+			"body_size":  bodySize,
+		})
+
+		if statusCode >= 500 {
+			entry.Error("Server error")
+		} else if statusCode >= 400 {
+			entry.Warn("Client error")
+		} else {
+			entry.Info("Request completed")
+		}
+	}
+}
+
 func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleashapp.Service, releaseChannelRepo releasechannel.Repository) *gin.Engine {
-	router := gin.Default()
-	gin.DefaultWriter = logger.Writer()
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(jsonLoggerMiddleware(logger, []string{"/healthz"}))
 
 	// Health check
 	router.GET("/healthz", func(c *gin.Context) {
