@@ -352,17 +352,15 @@ func (h *UnleashHandler) validateReleaseChannelSwitch(ctx context.Context, oldCh
 		return fmt.Errorf("failed to get new release channel %s: %w", newChannelName, err)
 	}
 
-	// Extract version from image (e.g., "quay.io/unleash/unleash-server:6.3.0" -> "6.3.0")
-	oldVersion := extractVersionFromImage(oldChannel.Image)
-	oldVersion = strings.TrimPrefix(oldVersion, "v")
+	// Use status version (already parsed by unleasherator)
+	oldVersion := strings.TrimPrefix(oldChannel.Status.Version, "v")
 	oldSemver, err := semver.NewVersion(oldVersion)
 	if err != nil {
 		return fmt.Errorf("failed to parse old channel version %s: %w", oldVersion, err)
 	}
 
-	// Extract version from image
-	newVersion := extractVersionFromImage(newChannel.Image)
-	newVersion = strings.TrimPrefix(newVersion, "v")
+	// Use status version (already parsed by unleasherator)
+	newVersion := strings.TrimPrefix(newChannel.Status.Version, "v")
 	newSemver, err := semver.NewVersion(newVersion)
 	if err != nil {
 		return fmt.Errorf("failed to parse new channel version %s: %w", newVersion, err)
@@ -387,10 +385,29 @@ func (h *UnleashHandler) validateReleaseChannelSwitch(ctx context.Context, oldCh
 }
 
 // extractVersionFromImage extracts the version tag from a container image reference.
-// e.g., "quay.io/unleash/unleash-server:6.3.0" -> "6.3.0"
+// Handles various tag formats:
+// - "quay.io/unleash/unleash-server:6.3.0" -> "6.3.0"
+// - "quay.io/unleash/unleash-server:6-6.10.1-55d1b38" -> "6.10.1"
+// - "quay.io/unleash/unleash-server:v6.3.0" -> "6.3.0"
 func extractVersionFromImage(image string) string {
 	if idx := strings.LastIndex(image, ":"); idx != -1 {
-		return image[idx+1:]
+		tag := image[idx+1:]
+
+		// Handle format like "6-6.10.1-abc123" - extract middle part
+		// Split by '-' and look for semantic version pattern
+		parts := strings.Split(tag, "-")
+		for _, part := range parts {
+			// Check if this part looks like a semantic version (X.Y.Z)
+			if strings.Count(part, ".") >= 2 {
+				// Verify it starts with a digit
+				if len(part) > 0 && part[0] >= '0' && part[0] <= '9' {
+					return strings.TrimPrefix(part, "v")
+				}
+			}
+		}
+
+		// Fallback to original tag (handles simple cases like "6.3.0" or "v6.3.0")
+		return strings.TrimPrefix(tag, "v")
 	}
 	return ""
 }

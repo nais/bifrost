@@ -265,16 +265,25 @@ func TestUpdateInstance_ReleaseChannelDowngradeProtection(t *testing.T) {
 						return &releasechannel.Channel{
 							Name:  "stable",
 							Image: "quay.io/unleash/unleash-server:5.10.0",
+							Status: releasechannel.ChannelStatus{
+								Version: "5.10.0",
+							},
 						}, nil
 					case "rapid":
 						return &releasechannel.Channel{
 							Name:  "rapid",
 							Image: "quay.io/unleash/unleash-server:5.11.0",
+							Status: releasechannel.ChannelStatus{
+								Version: "5.11.0",
+							},
 						}, nil
 					case "next":
 						return &releasechannel.Channel{
 							Name:  "next",
 							Image: "quay.io/unleash/unleash-server:6.0.0",
+							Status: releasechannel.ChannelStatus{
+								Version: "6.0.0",
+							},
 						}, nil
 					default:
 						return nil, errors.New("channel not found")
@@ -832,4 +841,55 @@ func TestUpdateInstance_PreservesFederationSettings(t *testing.T) {
 	// Note: MergeTeamsAndNamespaces merges teams and namespaces into both fields
 	assert.Equal(t, "team-a,team-b,team-c", updated.AllowedNamespaces, "allowed namespaces are merged with teams")
 	assert.Equal(t, "dev-gcp,prod-gcp", updated.AllowedClusters, "allowed clusters should be preserved")
+}
+
+func TestExtractVersionFromImage(t *testing.T) {
+	tests := []struct {
+		name     string
+		image    string
+		expected string
+	}{
+		{
+			name:     "simple semantic version",
+			image:    "quay.io/unleash/unleash-server:6.3.0",
+			expected: "6.3.0",
+		},
+		{
+			name:     "semantic version with v prefix",
+			image:    "quay.io/unleash/unleash-server:v6.3.0",
+			expected: "6.3.0",
+		},
+		{
+			name:     "version with major prefix and commit hash",
+			image:    "quay.io/unleash/unleash-server:6-6.10.1-55d1b38",
+			expected: "6.10.1",
+		},
+		{
+			name:     "version 7 with major prefix and commit hash",
+			image:    "quay.io/unleash/unleash-server:7-7.4.0-55d1b38",
+			expected: "7.4.0",
+		},
+		{
+			name:     "version with v prefix and major prefix",
+			image:    "quay.io/unleash/unleash-server:v6-6.10.1-abc",
+			expected: "6.10.1",
+		},
+		{
+			name:     "no tag",
+			image:    "quay.io/unleash/unleash-server",
+			expected: "",
+		},
+		{
+			name:     "latest tag",
+			image:    "quay.io/unleash/unleash-server:latest",
+			expected: "latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractVersionFromImage(tt.image)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
