@@ -37,7 +37,7 @@ func NewUnleashHandler(service unleash.IService, config *config.Config, logger *
 
 type ErrorResponse struct {
 	Error      string            `json:"error"`
-	Message    string            `json:"message"`
+	Message    string            `json:"message,omitempty"`
 	Details    map[string]string `json:"details,omitempty"`
 	StatusCode int               `json:"status_code"`
 }
@@ -58,8 +58,8 @@ func (h *UnleashHandler) ListInstances(c *gin.Context) {
 	if err != nil {
 		h.logger.WithContext(ctx).WithError(err).Error("Failed to list instances")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error:      "failed_to_list",
-			Message:    "Failed to retrieve Unleash instances",
+			Error:      "list_failed",
+			Message:    "Could not retrieve instances",
 			StatusCode: http.StatusInternalServerError,
 		})
 		return
@@ -87,8 +87,8 @@ func (h *UnleashHandler) GetInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Instance not found")
 		c.JSON(http.StatusNotFound, ErrorResponse{
 			Error:      "not_found",
-			Message:    "Unleash instance not found",
-			Details:    map[string]string{"instance": name},
+			Message:    "Instance not found",
+			Details:    map[string]string{"name": name},
 			StatusCode: http.StatusNotFound,
 		})
 		return
@@ -137,7 +137,7 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 			h.logger.WithContext(ctx).WithField("name", req.Name).Warn("Instance creation rejected: must specify custom-version, release-channel-name, or configure a default release channel")
 			c.JSON(http.StatusBadRequest, ErrorResponse{
 				Error:      "no_version_source",
-				Message:    "Must specify either custom-version or release-channel-name, or configure a default release channel",
+				Message:    "Must specify custom-version or release-channel-name",
 				StatusCode: http.StatusBadRequest,
 			})
 			return
@@ -151,8 +151,7 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", req.Name).Error("Validation failed")
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:      "validation_failed",
-			Message:    "Configuration validation failed",
-			Details:    map[string]string{"validation": err.Error()},
+			Details:    map[string]string{"reason": err.Error()},
 			StatusCode: http.StatusBadRequest,
 		})
 		return
@@ -163,8 +162,6 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", config.Name).Error("Failed to create instance")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:      "creation_failed",
-			Message:    "Failed to create Unleash instance",
-			Details:    map[string]string{"error": err.Error()},
 			StatusCode: http.StatusInternalServerError,
 		})
 		return
@@ -211,8 +208,8 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Instance not found")
 		c.JSON(http.StatusNotFound, ErrorResponse{
 			Error:      "not_found",
-			Message:    "Unleash instance not found",
-			Details:    map[string]string{"instance": name},
+			Message:    "Instance not found",
+			Details:    map[string]string{"name": name},
 			StatusCode: http.StatusNotFound,
 		})
 		return
@@ -254,11 +251,10 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 				}).Warn("Release channel switch validation failed")
 				c.JSON(http.StatusBadRequest, ErrorResponse{
 					Error:   "invalid_channel_switch",
-					Message: "Cannot switch to release channel with lower major version",
+					Message: "Cannot downgrade major version",
 					Details: map[string]string{
-						"old_channel": existing.ReleaseChannelName,
-						"new_channel": req.ReleaseChannelName,
-						"error":       err.Error(),
+						"from": existing.ReleaseChannelName,
+						"to":   req.ReleaseChannelName,
 					},
 					StatusCode: http.StatusBadRequest,
 				})
@@ -275,8 +271,7 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Validation failed")
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:      "validation_failed",
-			Message:    "Configuration validation failed",
-			Details:    map[string]string{"validation": err.Error()},
+			Details:    map[string]string{"reason": err.Error()},
 			StatusCode: http.StatusBadRequest,
 		})
 		return
@@ -287,8 +282,6 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Failed to update instance")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:      "update_failed",
-			Message:    "Failed to update Unleash instance",
-			Details:    map[string]string{"error": err.Error()},
 			StatusCode: http.StatusInternalServerError,
 		})
 		return
@@ -316,8 +309,8 @@ func (h *UnleashHandler) DeleteInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Warn("Instance not found")
 		c.JSON(http.StatusNotFound, ErrorResponse{
 			Error:      "not_found",
-			Message:    "Unleash instance not found",
-			Details:    map[string]string{"instance": name},
+			Message:    "Instance not found",
+			Details:    map[string]string{"name": name},
 			StatusCode: http.StatusNotFound,
 		})
 		return
@@ -327,8 +320,6 @@ func (h *UnleashHandler) DeleteInstance(c *gin.Context) {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Failed to delete instance")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:      "deletion_failed",
-			Message:    "Failed to delete Unleash instance",
-			Details:    map[string]string{"error": err.Error()},
 			StatusCode: http.StatusInternalServerError,
 		})
 		return

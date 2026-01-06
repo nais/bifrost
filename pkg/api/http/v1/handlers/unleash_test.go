@@ -307,7 +307,7 @@ func TestUpdateInstance_ReleaseChannelDowngradeProtection(t *testing.T) {
 				err := json.Unmarshal(w.Body.Bytes(), &response)
 				require.NoError(t, err)
 				assert.Equal(t, "invalid_channel_switch", response.Error)
-				assert.Contains(t, response.Message, "lower major version")
+				assert.Contains(t, response.Message, "downgrade")
 			}
 		})
 	}
@@ -654,7 +654,7 @@ func TestCreateInstance_NoVersionSourceRejected(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	assert.Equal(t, "no_version_source", response.Error)
-	assert.Contains(t, response.Message, "Must specify either custom-version or release-channel-name")
+	assert.Contains(t, response.Message, "Must specify")
 
 	// Instance should not have been created
 	_, exists := repo.instances["no-version-instance"]

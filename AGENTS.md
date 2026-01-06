@@ -35,18 +35,53 @@ Follow [tiger style](https://tigerstyle.dev/): Prefer obvious code over clever c
 
 ## Workflow
 
+**Available mise tasks:**
+
+```bash
+# Complete workflow (recommended after changes)
+mise run all              # Runs: tidy, fmt, generate, lint, vet, check, test, build
+
+# Code generation
+mise run generate         # Generate server and client code from OpenAPI spec
+mise run openapi          # Generate server code only
+mise run openapi-client   # Generate client code only
+
+# Code quality
+mise run fmt              # Format Go code
+mise run fmt-check        # Check Go code formatting
+mise run lint             # Run golangci-lint
+mise run vet              # Run go vet
+mise run check            # Run staticcheck and govulncheck
+
+# Testing
+mise run test             # Run tests
+mise run test-race        # Run tests with race detector
+mise run test-coverage    # Run tests with coverage report
+
+# Dependencies
+mise run tidy             # Tidy and verify go.mod
+mise run tidy-check       # Check if go.mod is tidy
+
+# Building
+mise run build            # Build binary
+mise run start            # Start the application
+
+# GitHub Actions
+mise run ratchet-check    # Verify actions are pinned
+mise run ratchet-pin      # Pin actions to commit SHAs
+mise run ratchet-update   # Update pinned actions
+```
+
 **After every coding session:**
 
 ```bash
 mise run all
 ```
 
-This runs: tidy, fmt, lint, vet, check, test, build
-
 **Before committing:**
 
 - Ensure all checks pass
-- Run `mise run ratchet-check` to verify actions are pinned
+- Run `mise run ratchet-check` if modifying workflows
 
 ## Architecture
 

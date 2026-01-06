@@ -390,9 +390,13 @@ components:
           description: Desired state of the Unleash instance
           properties:
             releaseChannel:
-              type: string
-              description: Name of the release channel for automatic version updates
-              example: stable
+              type: object
+              description: Release channel configuration for automatic version updates
+              properties:
+                name:
+                  type: string
+                  description: Name of the release channel
+                  example: stable
             customImage:
               type: string
               description: Custom container image override
