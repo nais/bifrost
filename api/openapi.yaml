@@ -15,8 +15,8 @@ info:
     url: https://github.com/nais/bifrost/blob/main/LICENSE
 
 servers:
-  - url: /v1
-    description: API v1
+  - url: /
+    description: Bifrost API server
 
 tags:
   - name: unleash-v1
@@ -25,7 +25,7 @@ tags:
     description: Release channel operations for version management
 
 paths:
-  /unleash:
+  /v1/unleash:
     get:
       summary: List all Unleash instances
       description: Returns a list of all Unleash feature flag server instances as Kubernetes CRDs
@@ -82,7 +82,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /unleash/{name}:
+  /v1/unleash/{name}:
     get:
       summary: Get Unleash instance by name
       description: Returns details of a specific Unleash instance as Kubernetes CRD
@@ -186,7 +186,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /releasechannels:
+  /v1/releasechannels:
     get:
       summary: List all release channels
       description: Returns a list of all available release channels for Unleash version management
@@ -209,7 +209,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /releasechannels/{name}:
+  /v1/releasechannels/{name}:
     get:
       summary: Get a release channel by name
       description: Returns details of a specific release channel

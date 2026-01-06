@@ -364,7 +364,7 @@ func NewListChannelsRequest(server string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/releasechannels")
+	operationPath := fmt.Sprintf("/v1/releasechannels")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -398,7 +398,7 @@ func NewGetChannelRequest(server string, name string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/releasechannels/%s", pathParam0)
+	operationPath := fmt.Sprintf("/v1/releasechannels/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -425,7 +425,7 @@ func NewListInstancesRequest(server string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/unleash")
+	operationPath := fmt.Sprintf("/v1/unleash")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -463,7 +463,7 @@ func NewCreateInstanceRequestWithBody(server string, contentType string, body io
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/unleash")
+	operationPath := fmt.Sprintf("/v1/unleash")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -499,7 +499,7 @@ func NewDeleteInstanceRequest(server string, name string) (*http.Request, error)
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/unleash/%s", pathParam0)
+	operationPath := fmt.Sprintf("/v1/unleash/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -533,7 +533,7 @@ func NewGetInstanceRequest(server string, name string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/unleash/%s", pathParam0)
+	operationPath := fmt.Sprintf("/v1/unleash/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -578,7 +578,7 @@ func NewUpdateInstanceRequestWithBody(server string, name string, contentType st
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/unleash/%s", pathParam0)
+	operationPath := fmt.Sprintf("/v1/unleash/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
