@@ -19,16 +19,19 @@ import (
 
 // MockUnleashCRDRepository implements UnleashCRDRepository for testing
 type MockUnleashCRDRepository struct {
-	mu          sync.Mutex
-	instances   map[string]*unleash.Instance
-	crds        map[string]*unleashv1.Unleash
-	listErr     error
-	getErr      error
-	getCRDErr   error
-	updateErr   error
-	updateCalls []string
-	readyAfter  map[string]int // instance name -> number of Get calls before becoming ready
-	getCounts   map[string]int // track Get calls per instance
+	mu               sync.Mutex
+	instances        map[string]*unleash.Instance
+	crds             map[string]*unleashv1.Unleash
+	listErr          error
+	getErr           error
+	getCRDErr        error
+	getCRDCallCount  int
+	getCRDFailAfterN int // If > 0, GetCRD succeeds for first N calls, then returns getCRDErr
+	updateErr        error
+	updateFailAfterN int // If > 0, Update succeeds for first N calls, then returns updateErr
+	updateCalls      []string
+	readyAfter       map[string]int // instance name -> number of Get calls before becoming ready
+	getCounts        map[string]int // track Get calls per instance
 }
 
 func NewMockUnleashCRDRepository() *MockUnleashCRDRepository {
@@ -92,8 +95,12 @@ func (m *MockUnleashCRDRepository) GetCRD(ctx context.Context, name string) (*un
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.getCRDCallCount++
+
 	if m.getCRDErr != nil {
-		return nil, m.getCRDErr
+		if m.getCRDFailAfterN == 0 || m.getCRDCallCount > m.getCRDFailAfterN {
+			return nil, m.getCRDErr
+		}
 	}
 
 	crd, ok := m.crds[name]
@@ -112,7 +119,9 @@ func (m *MockUnleashCRDRepository) Update(ctx context.Context, cfg *unleash.Conf
 	defer m.mu.Unlock()
 
 	if m.updateErr != nil {
-		return m.updateErr
+		if m.updateFailAfterN == 0 || len(m.updateCalls) >= m.updateFailAfterN {
+			return m.updateErr
+		}
 	}
 
 	m.updateCalls = append(m.updateCalls, cfg.Name)

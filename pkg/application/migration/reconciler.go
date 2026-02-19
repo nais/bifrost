@@ -242,40 +242,8 @@ func (r *Reconciler) migrateInstance(ctx context.Context, name, targetChannel st
 	log.Info("Successfully migrated instance to release channel")
 }
 
-// waitForHealthy polls the instance until it becomes ready or timeout
 func (r *Reconciler) waitForHealthy(ctx context.Context, name string) error {
-	timeout := r.config.Unleash.MigrationHealthTimeout
-	deadline := time.Now().Add(timeout)
-
-	ticker := time.NewTicker(r.pollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return &healthCheckTimeoutError{name: name, timeout: timeout}
-			}
-
-			inst, err := r.unleashRepo.Get(ctx, name)
-			if err != nil {
-				r.logger.WithError(err).WithField("instance", name).Debug("Health check failed to get instance")
-				continue
-			}
-
-			if inst.IsReady {
-				return nil
-			}
-
-			r.logger.WithFields(logrus.Fields{
-				"instance":  name,
-				"isReady":   inst.IsReady,
-				"remaining": time.Until(deadline).Round(time.Second),
-			}).Debug("Waiting for instance to become healthy")
-		}
-	}
+	return waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.MigrationHealthTimeout, r.pollInterval)
 }
 
 // rollback reverts an instance to its original custom version
@@ -382,6 +350,41 @@ func (r *Reconciler) logMigrationSummary() {
 		log.Warn("Migration reconciler completed with issues")
 	} else {
 		log.Info("Migration reconciler completed successfully")
+	}
+}
+
+// waitForHealthy polls the instance until it becomes ready or timeout expires
+func waitForHealthy(ctx context.Context, repo UnleashCRDRepository, logger *logrus.Logger, name string, timeout, pollInterval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return &healthCheckTimeoutError{name: name, timeout: timeout}
+			}
+
+			inst, err := repo.Get(ctx, name)
+			if err != nil {
+				logger.WithError(err).WithField("instance", name).Debug("Health check failed to get instance")
+				continue
+			}
+
+			if inst.IsReady {
+				return nil
+			}
+
+			logger.WithFields(logrus.Fields{
+				"instance":  name,
+				"isReady":   inst.IsReady,
+				"remaining": time.Until(deadline).Round(time.Second),
+			}).Debug("Waiting for instance to become healthy")
+		}
 	}
 }
 

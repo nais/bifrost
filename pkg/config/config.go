@@ -88,6 +88,49 @@ type UnleashConfig struct {
 	MigrationTargetChannel string        `env:"BIFROST_UNLEASH_MIGRATION_TARGET_CHANNEL"`
 	MigrationHealthTimeout time.Duration `env:"BIFROST_UNLEASH_MIGRATION_HEALTH_TIMEOUT,default=5m"`
 	MigrationDelay         time.Duration `env:"BIFROST_UNLEASH_MIGRATION_DELAY,default=30s"`
+
+	// Channel migration settings for transitioning between release channels (e.g., v5 to v6)
+	// ChannelMigrationMap is a comma-separated list of source:target pairs, e.g. "stable-v5:stable-v6,rapid-v5:rapid-v6"
+	ChannelMigrationEnabled       bool          `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED,default=false"`
+	ChannelMigrationMap           string        `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_MAP"`
+	ChannelMigrationHealthTimeout time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_HEALTH_TIMEOUT,default=5m"`
+	ChannelMigrationDelay         time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY,default=30s"`
+}
+
+// ParseChannelMigrationMap parses the ChannelMigrationMap string into a map of source→target channel pairs.
+// Format: "source1:target1,source2:target2"
+func (c *UnleashConfig) ParseChannelMigrationMap() (map[string]string, error) {
+	result := make(map[string]string)
+	if c.ChannelMigrationMap == "" {
+		return result, nil
+	}
+
+	for _, pair := range strings.Split(c.ChannelMigrationMap, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+
+		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return nil, fmt.Errorf("invalid channel migration map entry: %q (expected source:target)", pair)
+		}
+
+		source := strings.TrimSpace(parts[0])
+		target := strings.TrimSpace(parts[1])
+
+		if source == target {
+			return nil, fmt.Errorf("channel migration source and target are the same: %q", source)
+		}
+
+		if _, exists := result[source]; exists {
+			return nil, fmt.Errorf("duplicate source channel in migration map: %q", source)
+		}
+
+		result[source] = target
+	}
+
+	return result, nil
 }
 
 type Config struct {
