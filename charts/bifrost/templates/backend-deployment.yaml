@@ -101,6 +101,16 @@ spec:
             - name: BIFROST_UNLEASH_MIGRATION_DELAY
               value: {{ .Values.backend.unleash.migration.delay | quote }}
             {{- end }}
+            {{- if .Values.backend.unleash.channelMigration.enabled }}
+            - name: BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED
+              value: "true"
+            - name: BIFROST_UNLEASH_CHANNEL_MIGRATION_MAP
+              value: {{ .Values.backend.unleash.channelMigration.map | quote }}
+            - name: BIFROST_UNLEASH_CHANNEL_MIGRATION_HEALTH_TIMEOUT
+              value: {{ .Values.backend.unleash.channelMigration.healthTimeout | quote }}
+            - name: BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY
+              value: {{ .Values.backend.unleash.channelMigration.delay | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
