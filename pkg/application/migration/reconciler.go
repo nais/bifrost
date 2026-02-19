@@ -14,15 +14,24 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type migrationStatus string
+
 const (
-	// defaultPollInterval is the default interval between health checks
+	statusPending          migrationStatus = "pending"
+	statusInProgress       migrationStatus = "in-progress"
+	statusCompleted        migrationStatus = "completed"
+	statusFailed           migrationStatus = "failed"
+	statusRolledBack       migrationStatus = "rolled-back"
+	statusRollbackFailed   migrationStatus = "rollback-failed"
+	statusSkippedUnhealthy migrationStatus = "skipped-unhealthy"
+
 	defaultPollInterval = 10 * time.Second
 )
 
 // migrationState tracks the original custom version for rollback
 type migrationState struct {
 	originalCustomVersion string
-	status                string // "pending", "in-progress", "completed", "failed", "rolled-back"
+	status                migrationStatus
 }
 
 // UnleashCRDRepository extends unleash.Repository with CRD access needed for migration
@@ -127,7 +136,7 @@ func (r *Reconciler) Start(ctx context.Context) {
 	for _, inst := range candidates {
 		r.state.Store(inst.Name, &migrationState{
 			originalCustomVersion: inst.CustomVersion,
-			status:                "pending",
+			status:                statusPending,
 		})
 		r.pending = append(r.pending, inst.Name)
 	}
@@ -183,60 +192,61 @@ func (r *Reconciler) migrateInstance(ctx context.Context, name, targetChannel st
 
 	log.WithField("originalVersion", state.originalCustomVersion).Info("Starting migration")
 
-	// SAFETY CHECK: Verify instance is healthy before attempting migration
 	inst, err := r.unleashRepo.Get(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance before migration")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 	if !inst.IsReady {
 		log.Warn("Skipping migration: instance is not healthy before migration")
-		state.status = "skipped-unhealthy"
+		state.status = statusSkippedUnhealthy
 		r.removePending(name)
 		return
 	}
 
-	// Update state to in-progress
-	state.status = "in-progress"
+	state.status = statusInProgress
 
 	// Get CRD and build updated config
 	crd, err := r.unleashRepo.GetCRD(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance CRD for migration")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 
-	// Build config from existing CRD and update to release channel
 	builder := kubernetes.LoadConfigFromCRD(crd)
-	builder.WithReleaseChannel(targetChannel) // This clears CustomVersion
+	builder.WithReleaseChannel(targetChannel)
 	cfg, err := builder.Build()
 	if err != nil {
 		log.WithError(err).Error("Failed to build migration config")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 
-	// Apply the update
 	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
 		log.WithError(err).Error("Failed to update instance to release channel")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 
 	log.Info("Updated instance to release channel, waiting for health check")
 
-	// Wait for instance to become healthy
 	if err := r.waitForHealthy(ctx, name); err != nil {
 		log.WithError(err).Warn("Instance failed health check after migration, rolling back")
-		r.rollback(ctx, name, state.originalCustomVersion)
-		state.status = "rolled-back"
+		if rbErr := r.rollback(ctx, name, state.originalCustomVersion); rbErr != nil {
+			state.status = statusRollbackFailed
+		} else {
+			state.status = statusRolledBack
+		}
 		return
 	}
 
-	// Migration successful
-	state.status = "completed"
+	state.status = statusCompleted
 	r.removePending(name)
 
 	log.Info("Successfully migrated instance to release channel")
@@ -246,8 +256,7 @@ func (r *Reconciler) waitForHealthy(ctx context.Context, name string) error {
 	return waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.MigrationHealthTimeout, r.pollInterval)
 }
 
-// rollback reverts an instance to its original custom version
-func (r *Reconciler) rollback(ctx context.Context, name, originalVersion string) {
+func (r *Reconciler) rollback(ctx context.Context, name, originalVersion string) error {
 	log := r.logger.WithFields(logrus.Fields{
 		"instance":        name,
 		"originalVersion": originalVersion,
@@ -258,31 +267,30 @@ func (r *Reconciler) rollback(ctx context.Context, name, originalVersion string)
 	crd, err := r.unleashRepo.GetCRD(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance CRD for rollback")
-		return
+		return err
 	}
 
 	builder := kubernetes.LoadConfigFromCRD(crd)
-	builder.WithCustomVersion(originalVersion) // This clears ReleaseChannelName
+	builder.WithCustomVersion(originalVersion)
 	cfg, err := builder.Build()
 	if err != nil {
 		log.WithError(err).Error("Failed to build rollback config")
-		return
+		return err
 	}
 
 	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
 		log.WithError(err).Error("Failed to rollback instance")
-		return
+		return err
 	}
 
-	// Wait for rollback to restore health
 	if err := r.waitForHealthy(ctx, name); err != nil {
 		log.WithError(err).Error("CRITICAL: Instance did not recover after rollback - manual intervention required")
-		// Don't remove from pending - leave in failed state for visibility
-		return
+		return err
 	}
 
 	r.removePending(name)
 	log.Info("Successfully rolled back instance to original custom version")
+	return nil
 }
 
 // removePending removes an instance from the pending queue
@@ -309,7 +317,7 @@ func (r *Reconciler) logCurrentState(reason string) {
 	r.state.Range(func(key, value any) bool {
 		name := key.(string)
 		state := value.(*migrationState)
-		states[name] = state.status
+		states[name] = string(state.status)
 		return true
 	})
 
@@ -320,33 +328,37 @@ func (r *Reconciler) logCurrentState(reason string) {
 	}).Info("Migration reconciler state")
 }
 
-// logMigrationSummary logs a summary of the migration results
 func (r *Reconciler) logMigrationSummary() {
-	var completed, failed, skipped, rolledBack int
+	var completed, failed, skipped, rolledBack, rollbackFailed int
 
 	r.state.Range(func(key, value any) bool {
 		state := value.(*migrationState)
 		switch state.status {
-		case "completed":
+		case statusCompleted:
 			completed++
-		case "failed":
+		case statusFailed:
 			failed++
-		case "skipped-unhealthy":
+		case statusSkippedUnhealthy:
 			skipped++
-		case "rolled-back":
+		case statusRolledBack:
 			rolledBack++
+		case statusRollbackFailed:
+			rollbackFailed++
 		}
 		return true
 	})
 
 	log := r.logger.WithFields(logrus.Fields{
-		"completed":   completed,
-		"failed":      failed,
-		"skipped":     skipped,
-		"rolled_back": rolledBack,
+		"completed":       completed,
+		"failed":          failed,
+		"skipped":         skipped,
+		"rolled_back":     rolledBack,
+		"rollback_failed": rollbackFailed,
 	})
 
-	if failed > 0 || rolledBack > 0 {
+	if rollbackFailed > 0 {
+		log.Error("Migration reconciler completed with rollback failures - manual intervention required")
+	} else if failed > 0 || rolledBack > 0 {
 		log.Warn("Migration reconciler completed with issues")
 	} else {
 		log.Info("Migration reconciler completed successfully")

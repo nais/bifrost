@@ -13,14 +13,11 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// channelMigrationState tracks the original release channel for rollback
 type channelMigrationState struct {
 	originalChannel string
-	status          string // "pending", "in-progress", "completed", "failed", "rolled-back", "skipped-unhealthy"
+	status          migrationStatus
 }
 
-// ChannelReconciler handles migration of Unleash instances between release channels.
-// It supports a channel map for migrating multiple source channels to their targets simultaneously.
 type ChannelReconciler struct {
 	unleashRepo        UnleashCRDRepository
 	releaseChannelRepo releasechannel.Repository
@@ -29,12 +26,11 @@ type ChannelReconciler struct {
 
 	pollInterval time.Duration
 
-	state   sync.Map // map[string]*channelMigrationState
+	state   sync.Map
 	mu      sync.Mutex
 	pending []string
 }
 
-// NewChannelReconciler creates a new channel migration reconciler
 func NewChannelReconciler(
 	unleashRepo UnleashCRDRepository,
 	releaseChannelRepo releasechannel.Repository,
@@ -51,8 +47,6 @@ func NewChannelReconciler(
 	}
 }
 
-// Start begins the channel migration process.
-// It parses the channel map and migrates all instances on each source channel to the corresponding target.
 func (r *ChannelReconciler) Start(ctx context.Context) {
 	if !r.config.Unleash.ChannelMigrationEnabled {
 		r.logger.Debug("Channel migration reconciler called but not enabled, skipping")
@@ -72,7 +66,6 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 		return
 	}
 
-	// Validate all channels exist
 	for source, target := range channelMap {
 		if _, err := r.releaseChannelRepo.Get(ctx, source); err != nil {
 			r.logger.WithError(err).Errorf("Channel migration source channel %q not found", source)
@@ -121,7 +114,7 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 	for _, c := range candidates {
 		r.state.Store(c.instance.Name, &channelMigrationState{
 			originalChannel: c.instance.ReleaseChannelName,
-			status:          "pending",
+			status:          statusPending,
 		})
 		r.pending = append(r.pending, c.instance.Name)
 	}
@@ -174,22 +167,24 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 	inst, err := r.unleashRepo.Get(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance before channel migration")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 	if !inst.IsReady {
 		log.Warn("Skipping channel migration: instance is not healthy")
-		state.status = "skipped-unhealthy"
+		state.status = statusSkippedUnhealthy
 		r.removePending(name)
 		return
 	}
 
-	state.status = "in-progress"
+	state.status = statusInProgress
 
 	crd, err := r.unleashRepo.GetCRD(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance CRD for channel migration")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 
@@ -198,13 +193,15 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 	cfg, err := builder.Build()
 	if err != nil {
 		log.WithError(err).Error("Failed to build channel migration config")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 
 	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
 		log.WithError(err).Error("Failed to update instance to target channel")
-		state.status = "failed"
+		state.status = statusFailed
+		r.removePending(name)
 		return
 	}
 
@@ -212,18 +209,21 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 
 	if err := waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.ChannelMigrationHealthTimeout, r.pollInterval); err != nil {
 		log.WithError(err).Warn("Instance failed health check after channel migration, rolling back")
-		r.rollback(ctx, name, state.originalChannel)
-		state.status = "rolled-back"
+		if rbErr := r.rollback(ctx, name, state.originalChannel); rbErr != nil {
+			state.status = statusRollbackFailed
+		} else {
+			state.status = statusRolledBack
+		}
 		return
 	}
 
-	state.status = "completed"
+	state.status = statusCompleted
 	r.removePending(name)
 
 	log.Info("Successfully migrated instance to target channel")
 }
 
-func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel string) {
+func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel string) error {
 	log := r.logger.WithFields(logrus.Fields{
 		"instance":        name,
 		"originalChannel": originalChannel,
@@ -234,7 +234,7 @@ func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel 
 	crd, err := r.unleashRepo.GetCRD(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance CRD for channel rollback")
-		return
+		return err
 	}
 
 	builder := kubernetes.LoadConfigFromCRD(crd)
@@ -242,21 +242,22 @@ func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel 
 	cfg, err := builder.Build()
 	if err != nil {
 		log.WithError(err).Error("Failed to build channel rollback config")
-		return
+		return err
 	}
 
 	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
 		log.WithError(err).Error("Failed to rollback instance to original channel")
-		return
+		return err
 	}
 
 	if err := waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.ChannelMigrationHealthTimeout, r.pollInterval); err != nil {
 		log.WithError(err).Error("CRITICAL: Instance did not recover after channel rollback - manual intervention required")
-		return
+		return err
 	}
 
 	r.removePending(name)
 	log.Info("Successfully rolled back instance to original channel")
+	return nil
 }
 
 func (r *ChannelReconciler) removePending(name string) {
@@ -281,7 +282,7 @@ func (r *ChannelReconciler) logCurrentState(reason string) {
 	r.state.Range(func(key, value any) bool {
 		name := key.(string)
 		state := value.(*channelMigrationState)
-		states[name] = state.status
+		states[name] = string(state.status)
 		return true
 	})
 
@@ -293,31 +294,36 @@ func (r *ChannelReconciler) logCurrentState(reason string) {
 }
 
 func (r *ChannelReconciler) logMigrationSummary() {
-	var completed, failed, skipped, rolledBack int
+	var completed, failed, skipped, rolledBack, rollbackFailed int
 
 	r.state.Range(func(key, value any) bool {
 		state := value.(*channelMigrationState)
 		switch state.status {
-		case "completed":
+		case statusCompleted:
 			completed++
-		case "failed":
+		case statusFailed:
 			failed++
-		case "skipped-unhealthy":
+		case statusSkippedUnhealthy:
 			skipped++
-		case "rolled-back":
+		case statusRolledBack:
 			rolledBack++
+		case statusRollbackFailed:
+			rollbackFailed++
 		}
 		return true
 	})
 
 	log := r.logger.WithFields(logrus.Fields{
-		"completed":   completed,
-		"failed":      failed,
-		"skipped":     skipped,
-		"rolled_back": rolledBack,
+		"completed":       completed,
+		"failed":          failed,
+		"skipped":         skipped,
+		"rolled_back":     rolledBack,
+		"rollback_failed": rollbackFailed,
 	})
 
-	if failed > 0 || rolledBack > 0 {
+	if rollbackFailed > 0 {
+		log.Error("Channel migration reconciler completed with rollback failures - manual intervention required")
+	} else if failed > 0 || rolledBack > 0 {
 		log.Warn("Channel migration reconciler completed with issues")
 	} else {
 		log.Info("Channel migration reconciler completed successfully")

@@ -462,7 +462,7 @@ func TestReconciler_MigrateInstance_UpdateFails(t *testing.T) {
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
 	state := stateVal.(*migrationState)
-	assert.Equal(t, "failed", state.status)
+	assert.Equal(t, statusFailed, state.status)
 }
 
 func TestReconciler_MigrateInstance_GetCRDFails(t *testing.T) {
@@ -488,7 +488,7 @@ func TestReconciler_MigrateInstance_GetCRDFails(t *testing.T) {
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
 	state := stateVal.(*migrationState)
-	assert.Equal(t, "failed", state.status)
+	assert.Equal(t, statusFailed, state.status)
 }
 
 func TestReconciler_MigrateInstance_SkipsUnhealthyInstances(t *testing.T) {
@@ -513,7 +513,7 @@ func TestReconciler_MigrateInstance_SkipsUnhealthyInstances(t *testing.T) {
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
 	state := stateVal.(*migrationState)
-	assert.Equal(t, "skipped-unhealthy", state.status)
+	assert.Equal(t, statusSkippedUnhealthy, state.status)
 }
 
 func TestReconciler_Start_ContextCancellation(t *testing.T) {
@@ -627,7 +627,8 @@ func TestReconciler_WaitForHealthy_ContextCancelled(t *testing.T) {
 
 func TestReconciler_Rollback_Success(t *testing.T) {
 	repo := NewMockUnleashCRDRepository()
-	repo.AddInstance("test-instance", "", "stable", false) // Currently on release channel
+	repo.AddInstance("test-instance", "", "stable", true)
+	repo.SetReadyAfterNCalls("test-instance", 1)
 
 	channelRepo := NewMockReleaseChannelRepository()
 
@@ -638,10 +639,9 @@ func TestReconciler_Rollback_Success(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Call rollback directly
-	reconciler.rollback(ctx, "test-instance", "6.2.0")
+	err := reconciler.rollback(ctx, "test-instance", "6.2.0")
+	assert.NoError(t, err)
 
-	// Should have updated to restore custom version
 	require.Len(t, repo.updateCalls, 1)
 	assert.Equal(t, "test-instance", repo.updateCalls[0])
 
@@ -666,11 +666,10 @@ func TestReconciler_Rollback_UpdateFails(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Call rollback - should not panic, just log error
-	reconciler.rollback(ctx, "test-instance", "6.2.0")
+	err := reconciler.rollback(ctx, "test-instance", "6.2.0")
+	assert.Error(t, err)
 
-	// Update was attempted but failed
-	assert.Empty(t, repo.updateCalls) // updateErr causes empty slice
+	assert.Empty(t, repo.updateCalls)
 }
 
 func TestReconciler_LogCurrentState(t *testing.T) {
@@ -684,11 +683,11 @@ func TestReconciler_LogCurrentState(t *testing.T) {
 	// Add some state
 	reconciler.state.Store("instance-1", &migrationState{
 		originalCustomVersion: "6.1.0",
-		status:                "completed",
+		status:                statusCompleted,
 	})
 	reconciler.state.Store("instance-2", &migrationState{
 		originalCustomVersion: "6.2.0",
-		status:                "in-progress",
+		status:                statusInProgress,
 	})
 	reconciler.pending = []string{"instance-3", "instance-4"}
 
@@ -748,9 +747,9 @@ func TestReconciler_MultipleInstances_PartialFailure(t *testing.T) {
 	state2, _ := reconciler.state.Load("instance-2")
 	state3, _ := reconciler.state.Load("instance-3")
 
-	assert.Equal(t, "completed", state1.(*migrationState).status)
-	assert.Equal(t, "rolled-back", state2.(*migrationState).status)
-	assert.Equal(t, "completed", state3.(*migrationState).status)
+	assert.Equal(t, statusCompleted, state1.(*migrationState).status)
+	assert.Equal(t, statusRollbackFailed, state2.(*migrationState).status)
+	assert.Equal(t, statusCompleted, state3.(*migrationState).status)
 
 	// Instance 2 should be rolled back to original version
 	inst2, err := repo.Get(ctx, "instance-2")

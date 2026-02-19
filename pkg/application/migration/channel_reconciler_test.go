@@ -238,7 +238,7 @@ func TestChannelReconciler_SkipsUnhealthyInstances(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, "skipped-unhealthy", stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusSkippedUnhealthy, stateVal.(*channelMigrationState).status)
 }
 
 func TestChannelReconciler_UpdateFails(t *testing.T) {
@@ -257,7 +257,7 @@ func TestChannelReconciler_UpdateFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, "failed", stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusFailed, stateVal.(*channelMigrationState).status)
 }
 
 func TestChannelReconciler_GetCRDFails(t *testing.T) {
@@ -278,7 +278,7 @@ func TestChannelReconciler_GetCRDFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, "failed", stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusFailed, stateVal.(*channelMigrationState).status)
 }
 
 func TestChannelReconciler_ContextCancellation(t *testing.T) {
@@ -339,9 +339,9 @@ func TestChannelReconciler_MultipleInstances_PartialFailure(t *testing.T) {
 	state2, _ := reconciler.state.Load("instance-2")
 	state3, _ := reconciler.state.Load("instance-3")
 
-	assert.Equal(t, "completed", state1.(*channelMigrationState).status)
-	assert.Equal(t, "rolled-back", state2.(*channelMigrationState).status)
-	assert.Equal(t, "completed", state3.(*channelMigrationState).status)
+	assert.Equal(t, statusCompleted, state1.(*channelMigrationState).status)
+	assert.Equal(t, statusRollbackFailed, state2.(*channelMigrationState).status)
+	assert.Equal(t, statusCompleted, state3.(*channelMigrationState).status)
 
 	ctx := context.Background()
 	inst2, err := repo.Get(ctx, "instance-2")
@@ -421,8 +421,8 @@ func TestChannelReconciler_MultipleChannelMappings_PartialRollback(t *testing.T)
 	stateRapid, _ := reconciler.state.Load("team-rapid")
 	stateStable, _ := reconciler.state.Load("team-stable")
 
-	assert.Equal(t, "completed", stateRapid.(*channelMigrationState).status)
-	assert.Equal(t, "rolled-back", stateStable.(*channelMigrationState).status)
+	assert.Equal(t, statusCompleted, stateRapid.(*channelMigrationState).status)
+	assert.Equal(t, statusRollbackFailed, stateStable.(*channelMigrationState).status)
 
 	instStable, err := repo.Get(ctx, "team-stable")
 	require.NoError(t, err)
@@ -451,7 +451,7 @@ func TestChannelReconciler_MigrateInstance_GetFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, "failed", stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusFailed, stateVal.(*channelMigrationState).status)
 }
 
 func TestChannelReconciler_Rollback_GetCRDFails(t *testing.T) {
@@ -473,7 +473,7 @@ func TestChannelReconciler_Rollback_GetCRDFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, "rolled-back", stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusRollbackFailed, stateVal.(*channelMigrationState).status)
 
 	inst, _ := repo.Get(context.Background(), "test-instance")
 	assert.Equal(t, "stable-v6", inst.ReleaseChannelName) // stuck on target since rollback failed
@@ -498,7 +498,7 @@ func TestChannelReconciler_Rollback_UpdateFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, "rolled-back", stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusRollbackFailed, stateVal.(*channelMigrationState).status)
 
 	inst, _ := repo.Get(context.Background(), "test-instance")
 	assert.Equal(t, "stable-v6", inst.ReleaseChannelName) // stuck on target since rollback update failed
