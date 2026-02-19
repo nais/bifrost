@@ -221,8 +221,10 @@ func Run(config *config.Config) {
 		logger.Fatal(err)
 	}
 
-	// Start migration reconciler in background if enabled
+	// Start migration reconcilers in background if enabled
 	var migrationCancel context.CancelFunc
+	var channelMigrationCancel context.CancelFunc
+
 	if config.Unleash.MigrationEnabled {
 		var migrationCtx context.Context
 		migrationCtx, migrationCancel = context.WithCancel(context.Background())
@@ -238,7 +240,22 @@ func Run(config *config.Config) {
 		logger.Info("Migration reconciler started in background")
 	}
 
-	// Setup signal handler to gracefully shutdown migration reconciler
+	if config.Unleash.ChannelMigrationEnabled {
+		var channelMigrationCtx context.Context
+		channelMigrationCtx, channelMigrationCancel = context.WithCancel(context.Background())
+
+		channelReconciler := migration.NewChannelReconciler(
+			repo.(migration.UnleashCRDRepository),
+			releaseChannelRepo,
+			config,
+			logger,
+		)
+
+		go channelReconciler.Start(channelMigrationCtx)
+		logger.Info("Channel migration reconciler started in background")
+	}
+
+	// Setup signal handler to gracefully shutdown migration reconcilers
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
@@ -246,6 +263,10 @@ func Run(config *config.Config) {
 		if migrationCancel != nil {
 			logger.Info("Shutting down migration reconciler")
 			migrationCancel()
+		}
+		if channelMigrationCancel != nil {
+			logger.Info("Shutting down channel migration reconciler")
+			channelMigrationCancel()
 		}
 	}()
 
