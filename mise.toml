@@ -2,7 +2,7 @@
 # https://mise.jdx.dev/
 
 [tools]
-go = "1.25"
+go = "1.26"
 "go:mvdan.cc/gofumpt" = "latest"
 "go:github.com/golangci/golangci-lint/cmd/golangci-lint" = "latest"
 "go:honnef.co/go/tools/cmd/staticcheck" = "latest"
