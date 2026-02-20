@@ -230,7 +230,7 @@ func Run(config *config.Config) {
 		migrationCtx, migrationCancel = context.WithCancel(context.Background())
 
 		reconciler := migration.NewReconciler(
-			repo.(migration.UnleashCRDRepository),
+			repo,
 			releaseChannelRepo,
 			config,
 			logger,
@@ -245,7 +245,7 @@ func Run(config *config.Config) {
 		channelMigrationCtx, channelMigrationCancel = context.WithCancel(context.Background())
 
 		channelReconciler := migration.NewChannelReconciler(
-			repo.(migration.UnleashCRDRepository),
+			repo,
 			releaseChannelRepo,
 			config,
 			logger,
