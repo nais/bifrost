@@ -13,26 +13,20 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type channelMigrationState struct {
-	originalChannel string
-	status          migrationStatus
-}
-
+// ChannelReconciler handles migration of Unleash instances between release channels
 type ChannelReconciler struct {
-	unleashRepo        UnleashCRDRepository
+	unleashRepo        unleash.Repository
 	releaseChannelRepo releasechannel.Repository
 	config             *config.Config
 	logger             *logrus.Logger
 
 	pollInterval time.Duration
-
-	state   sync.Map
-	mu      sync.Mutex
-	pending []string
+	state        sync.Map
+	pending      *pendingQueue
 }
 
 func NewChannelReconciler(
-	unleashRepo UnleashCRDRepository,
+	unleashRepo unleash.Repository,
 	releaseChannelRepo releasechannel.Repository,
 	cfg *config.Config,
 	logger *logrus.Logger,
@@ -43,7 +37,7 @@ func NewChannelReconciler(
 		config:             cfg,
 		logger:             logger,
 		pollInterval:       defaultPollInterval,
-		pending:            make([]string, 0),
+		pending:            newPendingQueue(),
 	}
 }
 
@@ -110,15 +104,13 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 		return candidates[i].instance.Name < candidates[j].instance.Name
 	})
 
-	r.mu.Lock()
 	for _, c := range candidates {
-		r.state.Store(c.instance.Name, &channelMigrationState{
-			originalChannel: c.instance.ReleaseChannelName,
-			status:          statusPending,
+		r.state.Store(c.instance.Name, &instanceState{
+			originalValue: c.instance.ReleaseChannelName,
+			status:        statusPending,
 		})
-		r.pending = append(r.pending, c.instance.Name)
+		r.pending.add(c.instance.Name)
 	}
-	r.mu.Unlock()
 
 	r.logger.WithFields(logrus.Fields{
 		"candidateCount": len(candidates),
@@ -129,7 +121,7 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 	for i, c := range candidates {
 		select {
 		case <-ctx.Done():
-			r.logCurrentState("Channel migration interrupted by shutdown")
+			logCurrentState(r.logger, &r.state, r.pending, "Channel migration interrupted by shutdown")
 			return
 		default:
 			r.migrateInstance(ctx, c.instance.Name, c.targetChannel)
@@ -138,7 +130,7 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 				r.logger.WithField("delay", migrationDelay).Debug("Waiting before next channel migration")
 				select {
 				case <-ctx.Done():
-					r.logCurrentState("Channel migration interrupted during delay")
+					logCurrentState(r.logger, &r.state, r.pending, "Channel migration interrupted during delay")
 					return
 				case <-time.After(migrationDelay):
 				}
@@ -146,7 +138,8 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 		}
 	}
 
-	r.logMigrationSummary()
+	summary := computeSummary(&r.state)
+	logSummary(r.logger, summary, "Channel migration reconciler")
 }
 
 func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetChannel string) {
@@ -160,21 +153,21 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 		log.Error("Instance not found in channel migration state")
 		return
 	}
-	state := stateVal.(*channelMigrationState)
+	state := stateVal.(*instanceState)
 
-	log.WithField("originalChannel", state.originalChannel).Info("Starting channel migration")
+	log.WithField("originalChannel", state.originalValue).Info("Starting channel migration")
 
 	inst, err := r.unleashRepo.Get(ctx, name)
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance before channel migration")
 		state.status = statusFailed
-		r.removePending(name)
+		r.pending.remove(name)
 		return
 	}
 	if !inst.IsReady {
 		log.Warn("Skipping channel migration: instance is not healthy")
 		state.status = statusSkippedUnhealthy
-		r.removePending(name)
+		r.pending.remove(name)
 		return
 	}
 
@@ -184,7 +177,7 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 	if err != nil {
 		log.WithError(err).Error("Failed to get instance CRD for channel migration")
 		state.status = statusFailed
-		r.removePending(name)
+		r.pending.remove(name)
 		return
 	}
 
@@ -194,14 +187,14 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 	if err != nil {
 		log.WithError(err).Error("Failed to build channel migration config")
 		state.status = statusFailed
-		r.removePending(name)
+		r.pending.remove(name)
 		return
 	}
 
 	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
 		log.WithError(err).Error("Failed to update instance to target channel")
 		state.status = statusFailed
-		r.removePending(name)
+		r.pending.remove(name)
 		return
 	}
 
@@ -209,7 +202,7 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 
 	if err := waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.ChannelMigrationHealthTimeout, r.pollInterval); err != nil {
 		log.WithError(err).Warn("Instance failed health check after channel migration, rolling back")
-		if rbErr := r.rollback(ctx, name, state.originalChannel); rbErr != nil {
+		if rbErr := r.rollback(ctx, name, state.originalValue); rbErr != nil {
 			state.status = statusRollbackFailed
 		} else {
 			state.status = statusRolledBack
@@ -218,7 +211,7 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 	}
 
 	state.status = statusCompleted
-	r.removePending(name)
+	r.pending.remove(name)
 
 	log.Info("Successfully migrated instance to target channel")
 }
@@ -255,77 +248,7 @@ func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel 
 		return err
 	}
 
-	r.removePending(name)
+	r.pending.remove(name)
 	log.Info("Successfully rolled back instance to original channel")
 	return nil
-}
-
-func (r *ChannelReconciler) removePending(name string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for i, n := range r.pending {
-		if n == name {
-			r.pending = append(r.pending[:i], r.pending[i+1:]...)
-			break
-		}
-	}
-}
-
-func (r *ChannelReconciler) logCurrentState(reason string) {
-	r.mu.Lock()
-	pendingCopy := make([]string, len(r.pending))
-	copy(pendingCopy, r.pending)
-	r.mu.Unlock()
-
-	states := make(map[string]string)
-	r.state.Range(func(key, value any) bool {
-		name := key.(string)
-		state := value.(*channelMigrationState)
-		states[name] = string(state.status)
-		return true
-	})
-
-	r.logger.WithFields(logrus.Fields{
-		"reason":  reason,
-		"pending": pendingCopy,
-		"states":  states,
-	}).Info("Channel migration reconciler state")
-}
-
-func (r *ChannelReconciler) logMigrationSummary() {
-	var completed, failed, skipped, rolledBack, rollbackFailed int
-
-	r.state.Range(func(key, value any) bool {
-		state := value.(*channelMigrationState)
-		switch state.status {
-		case statusCompleted:
-			completed++
-		case statusFailed:
-			failed++
-		case statusSkippedUnhealthy:
-			skipped++
-		case statusRolledBack:
-			rolledBack++
-		case statusRollbackFailed:
-			rollbackFailed++
-		}
-		return true
-	})
-
-	log := r.logger.WithFields(logrus.Fields{
-		"completed":       completed,
-		"failed":          failed,
-		"skipped":         skipped,
-		"rolled_back":     rolledBack,
-		"rollback_failed": rollbackFailed,
-	})
-
-	if rollbackFailed > 0 {
-		log.Error("Channel migration reconciler completed with rollback failures - manual intervention required")
-	} else if failed > 0 || rolledBack > 0 {
-		log.Warn("Channel migration reconciler completed with issues")
-	} else {
-		log.Info("Channel migration reconciler completed successfully")
-	}
 }

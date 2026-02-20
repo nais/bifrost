@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
+	"github.com/nais/bifrost/pkg/domain/unleash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,14 +29,14 @@ func newChannelTestConfig(enabled bool, channelMap string, healthTimeout time.Du
 	}
 }
 
-func newChannelTestReconciler(repo UnleashCRDRepository, channelRepo *MockReleaseChannelRepository, cfg *config.Config) *ChannelReconciler {
+func newChannelTestReconciler(repo unleash.Repository, channelRepo *MockReleaseChannelRepository, cfg *config.Config) *ChannelReconciler {
 	r := NewChannelReconciler(repo, channelRepo, cfg, newTestLogger())
 	r.pollInterval = 10 * time.Millisecond
 	return r
 }
 
 func TestChannelReconciler_Start_Disabled(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test", "", "stable-v5", true)
 
 	channelRepo := NewMockReleaseChannelRepository()
@@ -51,7 +52,7 @@ func TestChannelReconciler_Start_Disabled(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_EmptyMap(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	channelRepo := NewMockReleaseChannelRepository()
 	cfg := newChannelTestConfig(true, "", testHealthTimeout)
 	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
@@ -62,7 +63,7 @@ func TestChannelReconciler_Start_EmptyMap(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_InvalidMapFormat(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	channelRepo := NewMockReleaseChannelRepository()
 	cfg := newChannelTestConfig(true, "invalid-no-colon", testHealthTimeout)
 	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
@@ -73,7 +74,7 @@ func TestChannelReconciler_Start_InvalidMapFormat(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_SameSourceAndTarget(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	channelRepo := NewMockReleaseChannelRepository()
 	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
 	cfg := newChannelTestConfig(true, "stable-v5:stable-v5", testHealthTimeout)
@@ -85,7 +86,7 @@ func TestChannelReconciler_Start_SameSourceAndTarget(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_SourceChannelNotFound(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	channelRepo := NewMockReleaseChannelRepository()
 	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
 	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
@@ -97,7 +98,7 @@ func TestChannelReconciler_Start_SourceChannelNotFound(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_TargetChannelNotFound(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	channelRepo := NewMockReleaseChannelRepository()
 	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
 	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
@@ -109,7 +110,7 @@ func TestChannelReconciler_Start_TargetChannelNotFound(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_NoCandidates(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("team-alpha", "", "stable-v6", true) // already on target
 	repo.AddInstance("team-beta", "6.2.0", "", true)      // custom version
 
@@ -126,7 +127,7 @@ func TestChannelReconciler_Start_NoCandidates(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_DeterministicOrder(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("charlie", "", "stable-v5", false)
 	repo.AddInstance("alpha", "", "stable-v5", false)
 	repo.AddInstance("bravo", "", "stable-v5", false)
@@ -151,7 +152,7 @@ func TestChannelReconciler_Start_DeterministicOrder(t *testing.T) {
 }
 
 func TestChannelReconciler_Start_SkipsOtherChannels(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("team-v5", "", "stable-v5", false)
 	repo.AddInstance("team-v6", "", "stable-v6", true) // already on target
 	repo.AddInstance("team-rapid", "", "rapid", true)  // different channel
@@ -172,7 +173,7 @@ func TestChannelReconciler_Start_SkipsOtherChannels(t *testing.T) {
 }
 
 func TestChannelReconciler_MigrateInstance_Success(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	repo.SetReadyAfterNCalls("test-instance", 2)
 
@@ -196,7 +197,7 @@ func TestChannelReconciler_MigrateInstance_Success(t *testing.T) {
 }
 
 func TestChannelReconciler_MigrateInstance_HealthTimeout_Rollback(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	// Never becomes ready after migration -> timeout -> rollback
 
@@ -222,7 +223,7 @@ func TestChannelReconciler_MigrateInstance_HealthTimeout_Rollback(t *testing.T) 
 }
 
 func TestChannelReconciler_SkipsUnhealthyInstances(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", false) // not healthy
 
 	channelRepo := NewMockReleaseChannelRepository()
@@ -238,11 +239,11 @@ func TestChannelReconciler_SkipsUnhealthyInstances(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, statusSkippedUnhealthy, stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusSkippedUnhealthy, stateVal.(*instanceState).status)
 }
 
 func TestChannelReconciler_UpdateFails(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	repo.updateErr = errUpdateFailed
 
@@ -257,11 +258,11 @@ func TestChannelReconciler_UpdateFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, statusFailed, stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusFailed, stateVal.(*instanceState).status)
 }
 
 func TestChannelReconciler_GetCRDFails(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	repo.getCRDErr = errCRDNotFound
 
@@ -278,11 +279,11 @@ func TestChannelReconciler_GetCRDFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, statusFailed, stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusFailed, stateVal.(*instanceState).status)
 }
 
 func TestChannelReconciler_ContextCancellation(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("instance-1", "", "stable-v5", true)
 	repo.AddInstance("instance-2", "", "stable-v5", true)
 	repo.AddInstance("instance-3", "", "stable-v5", true)
@@ -317,7 +318,7 @@ func TestChannelReconciler_ContextCancellation(t *testing.T) {
 }
 
 func TestChannelReconciler_MultipleInstances_PartialFailure(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("instance-1", "", "stable-v5", true)
 	repo.AddInstance("instance-2", "", "stable-v5", true)
 	repo.AddInstance("instance-3", "", "stable-v5", true)
@@ -339,9 +340,9 @@ func TestChannelReconciler_MultipleInstances_PartialFailure(t *testing.T) {
 	state2, _ := reconciler.state.Load("instance-2")
 	state3, _ := reconciler.state.Load("instance-3")
 
-	assert.Equal(t, statusCompleted, state1.(*channelMigrationState).status)
-	assert.Equal(t, statusRollbackFailed, state2.(*channelMigrationState).status)
-	assert.Equal(t, statusCompleted, state3.(*channelMigrationState).status)
+	assert.Equal(t, statusCompleted, state1.(*instanceState).status)
+	assert.Equal(t, statusRollbackFailed, state2.(*instanceState).status)
+	assert.Equal(t, statusCompleted, state3.(*instanceState).status)
 
 	ctx := context.Background()
 	inst2, err := repo.Get(ctx, "instance-2")
@@ -350,7 +351,7 @@ func TestChannelReconciler_MultipleInstances_PartialFailure(t *testing.T) {
 }
 
 func TestChannelReconciler_ListError(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.listErr = errListFailed
 
 	channelRepo := NewMockReleaseChannelRepository()
@@ -366,7 +367,7 @@ func TestChannelReconciler_ListError(t *testing.T) {
 }
 
 func TestChannelReconciler_MultipleChannelMappings(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("team-stable-v5", "", "stable-v5", false)
 	repo.AddInstance("team-rapid-v5", "", "rapid-v5", false)
 	repo.AddInstance("team-already-v6", "", "stable-v6", true)
@@ -400,7 +401,7 @@ func TestChannelReconciler_MultipleChannelMappings(t *testing.T) {
 }
 
 func TestChannelReconciler_MultipleChannelMappings_PartialRollback(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("team-stable", "", "stable-v5", true)
 	repo.AddInstance("team-rapid", "", "rapid-v5", true)
 
@@ -421,8 +422,8 @@ func TestChannelReconciler_MultipleChannelMappings_PartialRollback(t *testing.T)
 	stateRapid, _ := reconciler.state.Load("team-rapid")
 	stateStable, _ := reconciler.state.Load("team-stable")
 
-	assert.Equal(t, statusCompleted, stateRapid.(*channelMigrationState).status)
-	assert.Equal(t, statusRollbackFailed, stateStable.(*channelMigrationState).status)
+	assert.Equal(t, statusCompleted, stateRapid.(*instanceState).status)
+	assert.Equal(t, statusRollbackFailed, stateStable.(*instanceState).status)
 
 	instStable, err := repo.Get(ctx, "team-stable")
 	require.NoError(t, err)
@@ -434,7 +435,7 @@ func TestChannelReconciler_MultipleChannelMappings_PartialRollback(t *testing.T)
 }
 
 func TestChannelReconciler_MigrateInstance_GetFails(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	repo.getErr = errors.New("get failed")
 
@@ -451,11 +452,11 @@ func TestChannelReconciler_MigrateInstance_GetFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, statusFailed, stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusFailed, stateVal.(*instanceState).status)
 }
 
 func TestChannelReconciler_Rollback_GetCRDFails(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	repo.getCRDErr = errCRDNotFound
 	repo.getCRDFailAfterN = 1 // first GetCRD (migration) succeeds, second (rollback) fails
@@ -473,14 +474,14 @@ func TestChannelReconciler_Rollback_GetCRDFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, statusRollbackFailed, stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusRollbackFailed, stateVal.(*instanceState).status)
 
 	inst, _ := repo.Get(context.Background(), "test-instance")
 	assert.Equal(t, "stable-v6", inst.ReleaseChannelName) // stuck on target since rollback failed
 }
 
 func TestChannelReconciler_Rollback_UpdateFails(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "", "stable-v5", true)
 	repo.updateErr = errUpdateFailed
 	repo.updateFailAfterN = 1 // first Update (migration) succeeds, second (rollback) fails
@@ -498,14 +499,14 @@ func TestChannelReconciler_Rollback_UpdateFails(t *testing.T) {
 
 	stateVal, ok := reconciler.state.Load("test-instance")
 	require.True(t, ok)
-	assert.Equal(t, statusRollbackFailed, stateVal.(*channelMigrationState).status)
+	assert.Equal(t, statusRollbackFailed, stateVal.(*instanceState).status)
 
 	inst, _ := repo.Get(context.Background(), "test-instance")
 	assert.Equal(t, "stable-v6", inst.ReleaseChannelName) // stuck on target since rollback update failed
 }
 
 func TestChannelReconciler_Start_WithMigrationDelay(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("alpha", "", "stable-v5", false)
 	repo.AddInstance("bravo", "", "stable-v5", false)
 
@@ -529,7 +530,7 @@ func TestChannelReconciler_Start_WithMigrationDelay(t *testing.T) {
 }
 
 func TestChannelReconciler_ContextCancellation_DuringDelay(t *testing.T) {
-	repo := NewMockUnleashCRDRepository()
+	repo := NewMockUnleashRepository()
 	repo.AddInstance("alpha", "", "stable-v5", false)
 	repo.AddInstance("bravo", "", "stable-v5", false)
 
