@@ -47,6 +47,15 @@ backend:
       healthTimeout: "5m"
       delay: "30s"
 
+    # Channel migration settings for transitioning between release channels (e.g., v5 to v6)
+    # This is useful for major version upgrades across all instances on a specific channel
+    channelMigration:
+      enabled: false
+      # Comma-separated list of source:target channel pairs, e.g. "stable-v5:stable-v6,rapid-v5:rapid-v6"
+      map: ""
+      healthTimeout: "5m"
+      delay: "30s"
+
     # Unleash teams config
     teamsApiUrl: https://console.nav.cloud.nais.io/graphql
     # teamsApiToken:  # mapped in fasit

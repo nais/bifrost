@@ -11,11 +11,19 @@ backend:
 
     webIngressClass: foo
     webIngressHost: foo.bar
+    webOAuthJWTAudience: foo
 
     apiIngressClass: foo
     apiIngressHost: foo.bar
 
     teamsApiToken: foo
+
+    # Channel migration example config (disabled by default)
+    channelMigration:
+      enabled: false
+      map: "stable-v5:stable-v6,rapid-v5:rapid-v6"
+      healthTimeout: "5m"
+      delay: "30s"
 
   google:
     projectId: foo
