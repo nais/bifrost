@@ -58,7 +58,7 @@ values:
     config:
       type: bool
   backend.unleash.channelMigration.map:
-    displayName: Channel migration map (source:target pairs, comma-separated)
+    displayName: "Channel migration map (e.g. stable-v5:stable-v6,rapid-v5:rapid-v6)"
     config:
       type: string
   backend.unleash.channelMigration.healthTimeout:
