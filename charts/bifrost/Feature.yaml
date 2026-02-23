@@ -53,6 +53,22 @@ values:
     displayName: Delay between instance migrations (e.g. 30s)
     config:
       type: string
+  backend.unleash.channelMigration.enabled:
+    displayName: Enable channel-to-channel migration (e.g. v5 to v6)
+    config:
+      type: bool
+  backend.unleash.channelMigration.map:
+    displayName: "Channel migration map (e.g. stable-v5:stable-v6,rapid-v5:rapid-v6)"
+    config:
+      type: string
+  backend.unleash.channelMigration.healthTimeout:
+    displayName: Health check timeout for channel migration (e.g. 5m)
+    config:
+      type: string
+  backend.unleash.channelMigration.delay:
+    displayName: Delay between channel migrations (e.g. 30s)
+    config:
+      type: string
   backend.unleash.googleServiceAccountEmail:
     displayName: Biforst unleash Google service account email
     computed:

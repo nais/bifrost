@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -221,14 +223,16 @@ func Run(config *config.Config) {
 		logger.Fatal(err)
 	}
 
-	// Start migration reconciler in background if enabled
+	// Start migration reconcilers in background if enabled
 	var migrationCancel context.CancelFunc
+	var channelMigrationCancel context.CancelFunc
+
 	if config.Unleash.MigrationEnabled {
 		var migrationCtx context.Context
 		migrationCtx, migrationCancel = context.WithCancel(context.Background())
 
 		reconciler := migration.NewReconciler(
-			repo.(migration.UnleashCRDRepository),
+			repo,
 			releaseChannelRepo,
 			config,
 			logger,
@@ -238,21 +242,58 @@ func Run(config *config.Config) {
 		logger.Info("Migration reconciler started in background")
 	}
 
-	// Setup signal handler to gracefully shutdown migration reconciler
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-		<-sigChan
-		if migrationCancel != nil {
-			logger.Info("Shutting down migration reconciler")
-			migrationCancel()
-		}
-	}()
+	if config.Unleash.ChannelMigrationEnabled {
+		var channelMigrationCtx context.Context
+		channelMigrationCtx, channelMigrationCancel = context.WithCancel(context.Background())
+
+		channelReconciler := migration.NewChannelReconciler(
+			repo,
+			releaseChannelRepo,
+			config,
+			logger,
+		)
+
+		go channelReconciler.Start(channelMigrationCtx)
+		logger.Info("Channel migration reconciler started in background")
+	}
+
+	// Setup signal handler to gracefully shutdown migration reconcilers
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
 	router := setupRouter(config, logger, unleashService, releaseChannelRepo)
 
-	logger.Infof("Listening on %s", config.GetServerAddr())
-	if err := router.Run(config.GetServerAddr()); err != nil {
-		logger.Fatal(err)
+	srv := &http.Server{
+		Addr:    config.GetServerAddr(),
+		Handler: router,
 	}
+
+	go func() {
+		logger.Infof("Listening on %s", config.GetServerAddr())
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Fatal(err)
+		}
+	}()
+
+	<-sigChan
+	logger.Info("Received shutdown signal")
+
+	if migrationCancel != nil {
+		logger.Info("Shutting down migration reconciler")
+		migrationCancel()
+	}
+	if channelMigrationCancel != nil {
+		logger.Info("Shutting down channel migration reconciler")
+		channelMigrationCancel()
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	logger.Info("Shutting down HTTP server")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.WithError(err).Error("HTTP server shutdown error")
+	}
+
+	logger.Info("Server shutdown complete")
 }
