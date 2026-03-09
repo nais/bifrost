@@ -10,7 +10,7 @@ require (
 	github.com/nais/fqdn-policy v0.0.0-20251027123036-7371754b1946
 	github.com/nais/unleasherator v0.0.0-20251216221129-efebc54203fe
 	github.com/oapi-codegen/oapi-codegen/v2 v2.5.1
-	github.com/oapi-codegen/runtime v1.1.2
+	github.com/oapi-codegen/runtime v1.2.0
 	github.com/sethvargo/go-envconfig v1.3.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
