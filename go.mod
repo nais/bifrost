@@ -1,6 +1,6 @@
 module github.com/nais/bifrost
 
-go 1.26
+go 1.26.2
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
@@ -17,9 +17,9 @@ require (
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.276.0
 	gopkg.in/yaml.v2 v2.4.0
-	k8s.io/api v0.34.7
-	k8s.io/apimachinery v0.34.7
-	k8s.io/client-go v0.34.7
+	k8s.io/api v0.35.4
+	k8s.io/apimachinery v0.35.4
+	k8s.io/client-go v0.35.4
 	sigs.k8s.io/controller-runtime v0.22.5
 )
 
