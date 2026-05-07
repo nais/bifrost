@@ -79,6 +79,14 @@ spec:
               value: {{ .Values.backend.unleash.apiIngressClass | required ".unleash.apiIngressClass is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST
               value: {{ .Values.backend.unleash.apiIngressHost | required ".unleash.apiIngressHost is required" | quote }}
+            {{- if .Values.backend.unleash.secondaryWebIngressClass }}
+            - name: BIFROST_UNLEASH_INSTANCE_SECONDARY_WEB_INGRESS_CLASS
+              value: {{ .Values.backend.unleash.secondaryWebIngressClass | quote }}
+            {{- end }}
+            {{- if .Values.backend.unleash.secondaryApiIngressClass }}
+            - name: BIFROST_UNLEASH_INSTANCE_SECONDARY_API_INGRESS_CLASS
+              value: {{ .Values.backend.unleash.secondaryApiIngressClass | quote }}
+            {{- end }}
             - name: BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE
               value: {{ .Values.backend.unleash.webOAuthJWTAudience | required ".unleash.webOAuthJWTAudience is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL

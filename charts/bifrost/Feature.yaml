@@ -29,6 +29,10 @@ values:
     displayName: Api Ingress Class
     computed:
       template: '"nais-ingress"'
+  backend.unleash.secondaryApiIngressClass:
+    displayName: Secondary Api Ingress Class (haproxy migration)
+    computed:
+      template: '"internal-haproxy"'
   backend.unleash.apiIngressHost:
     displayName: Api Ingress Host
     computed:
@@ -104,6 +108,10 @@ values:
     displayName: Web Ingress Class
     computed:
       template: '"nais-ingress-fa"'
+  backend.unleash.secondaryWebIngressClass:
+    displayName: Secondary Web Ingress Class (haproxy migration)
+    computed:
+      template: '"external-fa-haproxy"'
   backend.unleash.webIngressHost:
     displayName: Web Ingress Host
     computed:
