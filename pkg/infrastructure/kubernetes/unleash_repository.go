@@ -514,16 +514,14 @@ func (r *UnleashRepository) getFQDNNetworkPolicy(ctx context.Context, name strin
 	return &fqdn, nil
 }
 
-// Extra Ingress operations (temporary migration support for nginx→haproxy)
+// The following operations are temporary during migration of ingress controller
 
-// extraIngressName generates a deterministic name for an extra ingress resource.
 func extraIngressName(instanceName, ingressType, class string) string {
 	// Sanitize class name for use in resource names
 	sanitized := strings.ReplaceAll(class, "/", "-")
 	return fmt.Sprintf("%s-%s-%s", instanceName, ingressType, sanitized)
 }
 
-// reconcileExtraIngresses creates or updates additional Ingress resources for secondary ingress classes.
 func (r *UnleashRepository) reconcileExtraIngresses(ctx context.Context, name string) error {
 	var errs []error
 
@@ -551,7 +549,6 @@ func (r *UnleashRepository) reconcileExtraIngresses(ctx context.Context, name st
 	return nil
 }
 
-// buildExtraIngress constructs an Ingress resource for an additional ingress class.
 func (r *UnleashRepository) buildExtraIngress(instanceName, ingressType, class, hostSuffix string) *networkingv1.Ingress {
 	host := fmt.Sprintf("%s-%s", instanceName, hostSuffix)
 	pathType := networkingv1.PathTypePrefix

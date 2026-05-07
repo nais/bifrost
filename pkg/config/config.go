@@ -78,11 +78,8 @@ type UnleashConfig struct {
 	InstanceWebOAuthJWTAudience string `env:"BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE,required"`
 	InstanceAPIIngressHost      string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST,required"`
 	InstanceAPIIngressClass     string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS,required"`
-
-	// Secondary ingress classes for temporary dual-ingress during nginx→haproxy migration.
-	// When set, bifrost creates additional Ingress resources with these classes.
-	SecondaryWebIngressClass string `env:"BIFROST_UNLEASH_INSTANCE_SECONDARY_WEB_INGRESS_CLASS"`
-	SecondaryAPIIngressClass string `env:"BIFROST_UNLEASH_INSTANCE_SECONDARY_API_INGRESS_CLASS"`
+	SecondaryWebIngressClass    string `env:"BIFROST_UNLEASH_INSTANCE_SECONDARY_WEB_INGRESS_CLASS"`
+	SecondaryAPIIngressClass    string `env:"BIFROST_UNLEASH_INSTANCE_SECONDARY_API_INGRESS_CLASS"`
 	TeamsApiURL                 string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL,required"`
 	TeamsApiSecretName          string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
 	TeamsApiSecretTokenKey      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
@@ -102,12 +99,10 @@ type UnleashConfig struct {
 	ChannelMigrationDelay         time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY,default=30s"`
 }
 
-// HasSecondaryWebIngressClass returns true if a secondary web ingress class is configured.
 func (c *UnleashConfig) HasSecondaryWebIngressClass() bool {
 	return c.SecondaryWebIngressClass != ""
 }
 
-// HasSecondaryAPIIngressClass returns true if a secondary API ingress class is configured.
 func (c *UnleashConfig) HasSecondaryAPIIngressClass() bool {
 	return c.SecondaryAPIIngressClass != ""
 }
