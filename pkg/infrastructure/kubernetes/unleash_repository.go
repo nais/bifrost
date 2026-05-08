@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -626,12 +627,23 @@ func (r *UnleashRepository) applyIngress(ctx context.Context, ingress *networkin
 	existing := &networkingv1.Ingress{}
 	err := r.kubeClient.Get(ctx, ctrl.ObjectKeyFromObject(ingress), existing)
 	if err != nil {
-		// Create if not found
-		if err := r.kubeClient.Create(ctx, ingress); err != nil {
-			return fmt.Errorf("failed to create extra ingress %s: %w", ingress.Name, err)
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get ingress %s: %w", ingress.Name, err)
 		}
-		r.logger.WithContext(ctx).WithField("ingress", ingress.Name).Info("Created extra ingress")
-		return nil
+
+		if err := r.kubeClient.Create(ctx, ingress); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				// Race condition — another goroutine created it, fetch and update
+				if err := r.kubeClient.Get(ctx, ctrl.ObjectKeyFromObject(ingress), existing); err != nil {
+					return fmt.Errorf("failed to get ingress after conflict: %w", err)
+				}
+			} else {
+				return fmt.Errorf("failed to create extra ingress %s: %w", ingress.Name, err)
+			}
+		} else {
+			r.logger.WithContext(ctx).WithField("ingress", ingress.Name).Info("Created extra ingress")
+			return nil
+		}
 	}
 
 	// Update existing
