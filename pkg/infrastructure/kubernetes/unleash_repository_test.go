@@ -274,3 +274,116 @@ func findIngress(ingresses []networkingv1.Ingress, name string) *networkingv1.In
 	}
 	return nil
 }
+
+func TestReconcileAllExtraIngresses(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+
+	// Create existing Unleash CRDs (simulating pre-existing instances)
+	existingInstances := []unleashv1.Unleash{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "instance-a",
+				Namespace: "unleash-ns",
+			},
+			Spec: unleashv1.UnleashSpec{
+				WebIngress: unleashv1.UnleashIngressConfig{
+					Enabled: true,
+					Host:    "instance-a-web.example.com",
+					Class:   "primary-web",
+				},
+				ApiIngress: unleashv1.UnleashIngressConfig{
+					Enabled: true,
+					Host:    "instance-a-api.example.com",
+					Class:   "primary-api",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "instance-b",
+				Namespace: "unleash-ns",
+			},
+			Spec: unleashv1.UnleashSpec{
+				WebIngress: unleashv1.UnleashIngressConfig{
+					Enabled: true,
+					Host:    "instance-b-web.example.com",
+					Class:   "primary-web",
+				},
+				ApiIngress: unleashv1.UnleashIngressConfig{
+					Enabled: true,
+					Host:    "instance-b-api.example.com",
+					Class:   "primary-api",
+				},
+			},
+		},
+	}
+
+	objs := make([]ctrl.Object, len(existingInstances))
+	for i := range existingInstances {
+		objs[i] = &existingInstances[i]
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+
+	cfg := &config.Config{
+		Unleash: config.UnleashConfig{
+			InstanceNamespace:        "unleash-ns",
+			InstanceWebIngressHost:   "web.example.com",
+			InstanceAPIIngressHost:   "api.example.com",
+			InstanceWebIngressClass:  "primary-web",
+			InstanceAPIIngressClass:  "primary-api",
+			SecondaryWebIngressClass: "secondary-web",
+			SecondaryAPIIngressClass: "secondary-api",
+		},
+	}
+
+	repo := &UnleashRepository{
+		kubeClient: client,
+		config:     cfg,
+		logger:     newTestLogger(),
+	}
+
+	err := repo.ReconcileAllExtraIngresses(ctx)
+	require.NoError(t, err)
+
+	// Should have created 4 ingresses (2 instances × 2 secondary ingresses each)
+	ingressList := &networkingv1.IngressList{}
+	err = client.List(ctx, ingressList, &ctrl.ListOptions{Namespace: "unleash-ns"})
+	require.NoError(t, err)
+	assert.Len(t, ingressList.Items, 4)
+
+	// Verify instance-a ingresses
+	assert.NotNil(t, findIngress(ingressList.Items, "instance-a-web-secondary-web"))
+	assert.NotNil(t, findIngress(ingressList.Items, "instance-a-api-secondary-api"))
+
+	// Verify instance-b ingresses
+	assert.NotNil(t, findIngress(ingressList.Items, "instance-b-web-secondary-web"))
+	assert.NotNil(t, findIngress(ingressList.Items, "instance-b-api-secondary-api"))
+}
+
+func TestReconcileAllExtraIngresses_NoSecondaryClasses(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	cfg := &config.Config{
+		Unleash: config.UnleashConfig{
+			InstanceNamespace: "unleash-ns",
+		},
+	}
+
+	repo := &UnleashRepository{
+		kubeClient: client,
+		config:     cfg,
+		logger:     newTestLogger(),
+	}
+
+	err := repo.ReconcileAllExtraIngresses(ctx)
+	require.NoError(t, err)
+
+	ingressList := &networkingv1.IngressList{}
+	err = client.List(ctx, ingressList, &ctrl.ListOptions{Namespace: "unleash-ns"})
+	require.NoError(t, err)
+	assert.Empty(t, ingressList.Items)
+}

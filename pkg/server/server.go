@@ -227,6 +227,20 @@ func Run(config *config.Config) {
 	var migrationCancel context.CancelFunc
 	var channelMigrationCancel context.CancelFunc
 
+	// Reconcile extra ingresses for existing instances on startup
+	if config.Unleash.HasSecondaryWebIngressClass() || config.Unleash.HasSecondaryAPIIngressClass() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if unleashRepo, ok := repo.(*kubernetes.UnleashRepository); ok {
+				if err := unleashRepo.ReconcileAllExtraIngresses(ctx); err != nil {
+					logger.WithError(err).Warn("Failed to reconcile extra ingresses on startup")
+				}
+			}
+		}()
+		logger.Info("Extra ingress reconciler started in background")
+	}
+
 	if config.Unleash.MigrationEnabled {
 		var migrationCtx context.Context
 		migrationCtx, migrationCancel = context.WithCancel(context.Background())

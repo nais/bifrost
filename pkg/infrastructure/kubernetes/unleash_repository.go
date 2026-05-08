@@ -514,6 +514,34 @@ func (r *UnleashRepository) getFQDNNetworkPolicy(ctx context.Context, name strin
 	return &fqdn, nil
 }
 
+// ReconcileAllExtraIngresses ensures all existing Unleash instances have secondary ingresses
+// when secondary ingress classes are configured. This handles instances that were created
+// before the secondary ingress feature was enabled.
+func (r *UnleashRepository) ReconcileAllExtraIngresses(ctx context.Context) error {
+	if !r.config.Unleash.HasSecondaryWebIngressClass() && !r.config.Unleash.HasSecondaryAPIIngressClass() {
+		return nil
+	}
+
+	crds, err := r.ListCRDs(ctx, false)
+	if err != nil {
+		return fmt.Errorf("failed to list unleash instances for ingress reconciliation: %w", err)
+	}
+
+	var errs []error
+	for _, crd := range crds {
+		if err := r.reconcileExtraIngresses(ctx, crd.Name); err != nil {
+			errs = append(errs, fmt.Errorf("instance %s: %w", crd.Name, err))
+		}
+	}
+
+	r.logger.WithField("instanceCount", len(crds)).Info("Reconciled extra ingresses for all instances")
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors reconciling extra ingresses: %v", errs)
+	}
+	return nil
+}
+
 // The following operations are temporary during migration of ingress controller
 
 func extraIngressName(instanceName, ingressType, class string) string {
