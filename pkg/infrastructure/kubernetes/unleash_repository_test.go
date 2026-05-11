@@ -11,18 +11,18 @@ import (
 func TestBuildUnleashCRD_IngressClass(t *testing.T) {
 	cfg := &config.Config{
 		Unleash: config.UnleashConfig{
-			InstanceNamespace:      "unleash-ns",
-			InstanceWebIngressHost: "web.example.com",
-			InstanceAPIIngressHost: "api.example.com",
+			InstanceNamespace:       "unleash-ns",
+			InstanceWebIngressHost:  "web.example.com",
+			InstanceAPIIngressHost:  "api.example.com",
 			InstanceWebIngressClass: "primary-web",
 			InstanceAPIIngressClass: "primary-api",
-			InstanceServiceaccount: "sa",
-			SQLInstanceID:          "sql-id",
-			SQLInstanceRegion:      "europe-north1",
-			SQLInstanceAddress:     "10.0.0.1",
-			TeamsApiURL:            "https://console.example.com/graphql",
-			TeamsApiSecretName:     "teams-secret",
-			TeamsApiSecretTokenKey: "token",
+			InstanceServiceaccount:  "sa",
+			SQLInstanceID:           "sql-id",
+			SQLInstanceRegion:       "europe-north1",
+			SQLInstanceAddress:      "10.0.0.1",
+			TeamsApiURL:             "https://console.example.com/graphql",
+			TeamsApiSecretName:      "teams-secret",
+			TeamsApiSecretTokenKey:  "token",
 		},
 		Google: config.GoogleConfig{
 			ProjectID: "my-project",

@@ -227,7 +227,6 @@ func Run(config *config.Config) {
 	var migrationCancel context.CancelFunc
 	var channelMigrationCancel context.CancelFunc
 
-
 	if config.Unleash.MigrationEnabled {
 		var migrationCtx context.Context
 		migrationCtx, migrationCancel = context.WithCancel(context.Background())

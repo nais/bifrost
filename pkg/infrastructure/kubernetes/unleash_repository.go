@@ -152,7 +152,6 @@ func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) err
 		return fmt.Errorf("failed to create unleash instance: %w", err)
 	}
 
-
 	return nil
 }
 
@@ -199,7 +198,6 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) err
 		return fmt.Errorf("failed to update unleash instance: %w", err)
 	}
 
-
 	logFields := logrus.Fields{
 		"operation":      "update_unleash",
 		"instance":       cfg.Name,
@@ -220,7 +218,6 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) err
 
 // Delete removes an Unleash instance
 func (r *UnleashRepository) Delete(ctx context.Context, name string) error {
-
 	// Delete FQDN network policy
 	if err := r.deleteFQDNNetworkPolicy(ctx, name); err != nil {
 		r.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Failed to delete FQDN network policy")
@@ -501,7 +498,6 @@ func (r *UnleashRepository) getFQDNNetworkPolicy(ctx context.Context, name strin
 
 	return &fqdn, nil
 }
-
 
 // LoadConfigFromCRD extracts a ConfigBuilder from an existing Unleash CRD for updates
 func LoadConfigFromCRD(crd *unleashv1.Unleash) *unleash.ConfigBuilder {

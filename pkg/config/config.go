@@ -97,7 +97,6 @@ type UnleashConfig struct {
 	ChannelMigrationDelay         time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY,default=30s"`
 }
 
-
 // ParseChannelMigrationMap parses the ChannelMigrationMap string into a map of source→target channel pairs.
 // Format: "source1:target1,source2:target2"
 func (c *UnleashConfig) ParseChannelMigrationMap() (map[string]string, error) {
