@@ -48,3 +48,16 @@ rules:
       - fqdnnetworkpolicies
     verbs:
       - "*"
+  # Midlertidig tilgang for opprettelse av haproxy ingresses, fjernes når vi switcher til haproxy default
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - ingresses
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
