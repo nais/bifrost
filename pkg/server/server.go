@@ -158,7 +158,7 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 
 	// Serve OpenAPI specification (JSON format from embedded spec)
 	router.GET("/openapi.json", func(c *gin.Context) {
-		swagger, err := generated.GetSwagger()
+		swagger, err := generated.GetSpec()
 		if err != nil {
 			logger.WithError(err).Error("Failed to get OpenAPI spec")
 			c.JSON(500, gin.H{"error": "failed to get spec"})
@@ -226,6 +226,20 @@ func Run(config *config.Config) {
 	// Start migration reconcilers in background if enabled
 	var migrationCancel context.CancelFunc
 	var channelMigrationCancel context.CancelFunc
+
+	// Reconcile extra ingresses for existing instances on startup
+	if config.Unleash.HasSecondaryWebIngressClass() || config.Unleash.HasSecondaryAPIIngressClass() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if unleashRepo, ok := repo.(*kubernetes.UnleashRepository); ok {
+				if err := unleashRepo.ReconcileAllExtraIngresses(ctx); err != nil {
+					logger.WithError(err).Warn("Failed to reconcile extra ingresses on startup")
+				}
+			}
+		}()
+		logger.Info("Extra ingress reconciler started in background")
+	}
 
 	if config.Unleash.MigrationEnabled {
 		var migrationCtx context.Context

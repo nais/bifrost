@@ -16,6 +16,10 @@ backend:
     apiIngressClass: foo
     apiIngressHost: foo.bar
 
+    # Secondary ingress classes (haproxy migration)
+    secondaryWebIngressClass: bar
+    secondaryApiIngressClass: baz
+
     teamsApiToken: foo
 
     # Channel migration example config (disabled by default)

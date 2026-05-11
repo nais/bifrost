@@ -6,18 +6,13 @@ metadata:
 spec:
   ingress:
   - from:
-    podSelector:
-      matchLabels:
-        app: nais-api
+    - podSelector:
+        matchLabels:
+          app: nais-api
   - from:
-    podSelector:
-      matchLabels:
-        app.kubernetes.io/name: ingress-nginx
-        app.kubernetes.io/instance: loadbalancer-iap
-  - from:
-    podSelector:
-      matchLabels:
-        app.kubernetes.io/name: prometheus
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
   egress:
   - to:
     - ipBlock:
