@@ -32,9 +32,6 @@ backend:
     # apiIngressClass:  # mapped in fasit
     # apiIngressHost:  # mapped in fasit
 
-    # Secondary ingress classes for nginx→haproxy migration (optional, remove after migration)
-    # secondaryWebIngressClass:  # mapped in fasit
-    # secondaryApiIngressClass:  # mapped in fasit
 
     # Unleash web oauth config
     # webOAuthJWTAudience: # mapped in fasit
