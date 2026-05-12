@@ -25,5 +25,22 @@ jobs:
       mise-tasks: '["tidy-check", "fmt-check", "generate-check", "lint", "vet", "check", "test-race"]'
       builds-docker: true
       builds-chart: true
-      deploys-to-fasit: true
       creates-git-tag: true
+
+  deploy:
+    name: Deploy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-and-deploy
+    runs-on: fasit-deploy
+    permissions:
+      id-token: write
+    steps:
+      - uses: nais/fasit-deploy@58a70a338b16dc646373c91724fc7e7522d085a4 # ratchet:nais/fasit-deploy@v4.0.1
+        with:
+          chart: oci://europe-north1-docker.pkg.dev/nais-io/nais/charts/${{ needs.build-and-deploy.outputs.name }}
+          version: ${{ needs.build-and-deploy.outputs.version }}
+          targets: |
+            [
+              { "target": { "kind": "management", "tenant": "ci-nais" }, "wait": true },
+              { "target": { "kind": "management" } }
+            ]
