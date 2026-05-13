@@ -62,11 +62,6 @@ type GoogleConfig struct {
 	ProjectID string `env:"BIFROST_GOOGLE_PROJECT_ID,required"`
 }
 
-type TeamsConfig struct {
-	TeamsApiURL   string `env:"BIFROST_TEAMS_API_URL,required"`
-	TeamsApiToken string `env:"BIFROST_TEAMS_API_TOKEN,required"`
-}
-
 type UnleashConfig struct {
 	InstanceNamespace           string `env:"BIFROST_UNLEASH_INSTANCE_NAMESPACE,required"`
 	InstanceServiceaccount      string `env:"BIFROST_UNLEASH_INSTANCE_SERVICEACCOUNT,required"`
@@ -147,7 +142,6 @@ type Config struct {
 	Meta                MetaConfig
 	Server              ServerConfig
 	Google              GoogleConfig
-	Teams               TeamsConfig
 	Unleash             UnleashConfig
 	DebugMode           bool
 	CloudConnectorProxy string `env:"BIFROST_CLOUD_CONNECTOR_PROXY_IMAGE,default=gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.1.0"`
