@@ -35,9 +35,6 @@ backend:
     serviceAccountEmail: foo@bar
     iapBackendServiceId: 123
 
-  teams:
-    apiToken: foo
-
 ingress:
   host: foo.bar
 

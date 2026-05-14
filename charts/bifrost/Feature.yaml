@@ -18,13 +18,7 @@ values:
   backend.image.tag:
     config:
       type: string
-  backend.teams.apiToken:
-    displayName: Teams API key for Bifrost backend
-    computed:
-      template: '"{{ .Management.bifrost_teams_api_key }}"'
-  backend.teams.apiUrl:
-    computed:
-      template: '"https://{{ subdomain . "console" }}/graphql"'
+
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class
     computed:
@@ -97,6 +91,7 @@ values:
     displayName: Unleash sql instance region
     computed:
       template: '"{{ .Management.bifrost_unleash_sql_instance_region }}"'
+
   backend.unleash.teamsApiToken:
     displayName: Teams API key for Unleash instances
     computed:

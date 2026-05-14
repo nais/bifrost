@@ -70,11 +70,6 @@ backend:
     # projectId:  # mapped in fasit
     # serviceAccountEmail:  # mapped in fasit
 
-  teams:
-    apiUrl: https://console.nav.cloud.nais.io/graphql
-    # apiToken:  # mapped in fasit
-    apiTokenSecretKey: token
-
 nameOverride: ""
 fullnameOverride: ""
 
