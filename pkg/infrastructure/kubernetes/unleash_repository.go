@@ -15,7 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -153,11 +152,6 @@ func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) err
 		return fmt.Errorf("failed to create unleash instance: %w", err)
 	}
 
-	// Create extra ingresses for additional ingress classes (temporary migration support)
-	if err := r.reconcileExtraIngresses(ctx, cfg.Name); err != nil {
-		r.logger.WithContext(ctx).WithError(err).WithField("instance", cfg.Name).Warn("Failed to create extra ingresses")
-	}
-
 	return nil
 }
 
@@ -204,11 +198,6 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) err
 		return fmt.Errorf("failed to update unleash instance: %w", err)
 	}
 
-	// Reconcile extra ingresses for additional ingress classes (temporary migration support)
-	if err := r.reconcileExtraIngresses(ctx, cfg.Name); err != nil {
-		r.logger.WithContext(ctx).WithError(err).WithField("instance", cfg.Name).Warn("Failed to reconcile extra ingresses")
-	}
-
 	logFields := logrus.Fields{
 		"operation":      "update_unleash",
 		"instance":       cfg.Name,
@@ -229,11 +218,6 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) err
 
 // Delete removes an Unleash instance
 func (r *UnleashRepository) Delete(ctx context.Context, name string) error {
-	// Delete extra ingresses
-	if err := r.deleteExtraIngresses(ctx, name); err != nil {
-		r.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Failed to delete extra ingresses")
-	}
-
 	// Delete FQDN network policy
 	if err := r.deleteFQDNNetworkPolicy(ctx, name); err != nil {
 		r.logger.WithContext(ctx).WithError(err).WithField("instance", name).Warn("Failed to delete FQDN network policy")
@@ -513,178 +497,6 @@ func (r *UnleashRepository) getFQDNNetworkPolicy(ctx context.Context, name strin
 	}
 
 	return &fqdn, nil
-}
-
-// ReconcileAllExtraIngresses ensures all existing Unleash instances have secondary ingresses
-// when secondary ingress classes are configured. This handles instances that were created
-// before the secondary ingress feature was enabled.
-func (r *UnleashRepository) ReconcileAllExtraIngresses(ctx context.Context) error {
-	if !r.config.Unleash.HasSecondaryWebIngressClass() && !r.config.Unleash.HasSecondaryAPIIngressClass() {
-		return nil
-	}
-
-	crds, err := r.ListCRDs(ctx, false)
-	if err != nil {
-		return fmt.Errorf("failed to list unleash instances for ingress reconciliation: %w", err)
-	}
-
-	var errs []error
-	for _, crd := range crds {
-		if err := r.reconcileExtraIngresses(ctx, crd.Name); err != nil {
-			errs = append(errs, fmt.Errorf("instance %s: %w", crd.Name, err))
-		}
-	}
-
-	r.logger.WithField("instanceCount", len(crds)).Info("Reconciled extra ingresses for all instances")
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors reconciling extra ingresses: %v", errs)
-	}
-	return nil
-}
-
-// The following operations are temporary during migration of ingress controller
-
-func extraIngressName(instanceName, ingressType, class string) string {
-	// Sanitize class name for use in resource names
-	sanitized := strings.ReplaceAll(class, "/", "-")
-	return fmt.Sprintf("%s-%s-%s", instanceName, ingressType, sanitized)
-}
-
-func (r *UnleashRepository) reconcileExtraIngresses(ctx context.Context, name string) error {
-	var errs []error
-
-	// Secondary web ingress
-	if r.config.Unleash.HasSecondaryWebIngressClass() {
-		class := r.config.Unleash.SecondaryWebIngressClass
-		ingress := r.buildExtraIngress(name, "web", class, r.config.Unleash.InstanceWebIngressHost)
-		if err := r.applyIngress(ctx, ingress); err != nil {
-			errs = append(errs, fmt.Errorf("secondary web ingress class %q: %w", class, err))
-		}
-	}
-
-	// Secondary API ingress
-	if r.config.Unleash.HasSecondaryAPIIngressClass() {
-		class := r.config.Unleash.SecondaryAPIIngressClass
-		ingress := r.buildExtraIngress(name, "api", class, r.config.Unleash.InstanceAPIIngressHost)
-		if err := r.applyIngress(ctx, ingress); err != nil {
-			errs = append(errs, fmt.Errorf("secondary api ingress class %q: %w", class, err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to reconcile secondary ingresses: %v", errs)
-	}
-	return nil
-}
-
-func (r *UnleashRepository) buildExtraIngress(instanceName, ingressType, class, hostSuffix string) *networkingv1.Ingress {
-	host := fmt.Sprintf("%s-%s", instanceName, hostSuffix)
-	pathType := networkingv1.PathTypePrefix
-
-	return &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      extraIngressName(instanceName, ingressType, class),
-			Namespace: r.config.Unleash.InstanceNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":  "bifrost",
-				"app.kubernetes.io/instance":    instanceName,
-				"bifrost.nais.io/ingress-type":  ingressType,
-				"bifrost.nais.io/extra-ingress": "true",
-			},
-		},
-		Spec: networkingv1.IngressSpec{
-			IngressClassName: &class,
-			Rules: []networkingv1.IngressRule{
-				{
-					Host: host,
-					IngressRuleValue: networkingv1.IngressRuleValue{
-						HTTP: &networkingv1.HTTPIngressRuleValue{
-							Paths: []networkingv1.HTTPIngressPath{
-								{
-									Path:     "/",
-									PathType: &pathType,
-									Backend: networkingv1.IngressBackend{
-										Service: &networkingv1.IngressServiceBackend{
-											Name: instanceName,
-											Port: networkingv1.ServiceBackendPort{
-												Name: "http",
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-// applyIngress creates or updates an Ingress resource.
-func (r *UnleashRepository) applyIngress(ctx context.Context, ingress *networkingv1.Ingress) error {
-	existing := &networkingv1.Ingress{}
-	err := r.kubeClient.Get(ctx, ctrl.ObjectKeyFromObject(ingress), existing)
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to get ingress %s: %w", ingress.Name, err)
-		}
-
-		if err := r.kubeClient.Create(ctx, ingress); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				// Race condition — another goroutine created it, fetch and update
-				if err := r.kubeClient.Get(ctx, ctrl.ObjectKeyFromObject(ingress), existing); err != nil {
-					return fmt.Errorf("failed to get ingress after conflict: %w", err)
-				}
-			} else {
-				return fmt.Errorf("failed to create extra ingress %s: %w", ingress.Name, err)
-			}
-		} else {
-			r.logger.WithContext(ctx).WithField("ingress", ingress.Name).Info("Created extra ingress")
-			return nil
-		}
-	}
-
-	// Update existing
-	ingress.ObjectMeta.ResourceVersion = existing.ObjectMeta.ResourceVersion
-	ingress.ObjectMeta.UID = existing.ObjectMeta.UID
-	if err := r.kubeClient.Update(ctx, ingress); err != nil {
-		return fmt.Errorf("failed to update extra ingress %s: %w", ingress.Name, err)
-	}
-	r.logger.WithContext(ctx).WithField("ingress", ingress.Name).Debug("Updated extra ingress")
-	return nil
-}
-
-// deleteExtraIngresses removes all extra ingress resources for an instance.
-func (r *UnleashRepository) deleteExtraIngresses(ctx context.Context, name string) error {
-	// Delete by label selector
-	ingressList := &networkingv1.IngressList{}
-	opts := &ctrl.ListOptions{
-		Namespace: r.config.Unleash.InstanceNamespace,
-	}
-	ctrl.MatchingLabels{
-		"app.kubernetes.io/instance":    name,
-		"bifrost.nais.io/extra-ingress": "true",
-	}.ApplyToList(opts)
-
-	if err := r.kubeClient.List(ctx, ingressList, opts); err != nil {
-		return fmt.Errorf("failed to list extra ingresses: %w", err)
-	}
-
-	var errs []error
-	for i := range ingressList.Items {
-		if err := r.kubeClient.Delete(ctx, &ingressList.Items[i]); err != nil {
-			errs = append(errs, fmt.Errorf("failed to delete ingress %s: %w", ingressList.Items[i].Name, err))
-		} else {
-			r.logger.WithContext(ctx).WithField("ingress", ingressList.Items[i].Name).Info("Deleted extra ingress")
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors deleting extra ingresses: %v", errs)
-	}
-	return nil
 }
 
 // LoadConfigFromCRD extracts a ConfigBuilder from an existing Unleash CRD for updates
