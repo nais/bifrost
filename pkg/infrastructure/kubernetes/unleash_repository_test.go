@@ -1,10 +1,13 @@
 package kubernetes
+
 import (
-"testing"
-"github.com/nais/bifrost/pkg/config"
-"github.com/nais/bifrost/pkg/domain/unleash"
-"github.com/stretchr/testify/assert"
+	"testing"
+
+	"github.com/nais/bifrost/pkg/config"
+	"github.com/nais/bifrost/pkg/domain/unleash"
+	"github.com/stretchr/testify/assert"
 )
+
 func TestBuildUnleashCRD_UsesIngressClasses(t *testing.T) {
 	cfg := &config.Config{
 		Unleash: config.UnleashConfig{

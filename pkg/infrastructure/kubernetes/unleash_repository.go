@@ -499,7 +499,6 @@ func (r *UnleashRepository) getFQDNNetworkPolicy(ctx context.Context, name strin
 	return &fqdn, nil
 }
 
-
 // LoadConfigFromCRD extracts a ConfigBuilder from an existing Unleash CRD for updates
 func LoadConfigFromCRD(crd *unleashv1.Unleash) *unleash.ConfigBuilder {
 	builder := unleash.NewConfigBuilder().WithName(crd.GetName())
