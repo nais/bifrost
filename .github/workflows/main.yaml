@@ -42,5 +42,5 @@ jobs:
           targets: |
             [
               { "target": { "kind": "management", "tenant": "ci-nais" }, "wait": true },
-              { "target": { "kind": "management" } "tenant": "dev-nais" }
+              { "target": { "kind": "management", "tenant": "dev-nais" } }
             ]
