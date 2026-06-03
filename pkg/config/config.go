@@ -73,8 +73,6 @@ type UnleashConfig struct {
 	InstanceWebOAuthJWTAudience string `env:"BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE,required"`
 	InstanceAPIIngressHost      string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST,required"`
 	InstanceAPIIngressClass     string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS,required"`
-	SecondaryWebIngressClass    string `env:"BIFROST_UNLEASH_INSTANCE_SECONDARY_WEB_INGRESS_CLASS"`
-	SecondaryAPIIngressClass    string `env:"BIFROST_UNLEASH_INSTANCE_SECONDARY_API_INGRESS_CLASS"`
 	TeamsApiURL                 string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL,required"`
 	TeamsApiSecretName          string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
 	TeamsApiSecretTokenKey      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
@@ -94,13 +92,6 @@ type UnleashConfig struct {
 	ChannelMigrationDelay         time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY,default=30s"`
 }
 
-func (c *UnleashConfig) HasSecondaryWebIngressClass() bool {
-	return c.SecondaryWebIngressClass != ""
-}
-
-func (c *UnleashConfig) HasSecondaryAPIIngressClass() bool {
-	return c.SecondaryAPIIngressClass != ""
-}
 
 // ParseChannelMigrationMap parses the ChannelMigrationMap string into a map of source→target channel pairs.
 // Format: "source1:target1,source2:target2"
