@@ -79,7 +79,6 @@ run = [
 
 [tasks.build]
 description = "Build binary"
-depends = ["openapi"]
 run = '''
 BUILDTIME=$(date "+%s")
 DATE=$(date "+%Y-%m-%d")
