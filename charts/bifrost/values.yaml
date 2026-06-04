@@ -32,9 +32,6 @@ backend:
     # apiIngressClass:  # mapped in fasit
     # apiIngressHost:  # mapped in fasit
 
-    # Secondary ingress classes for nginx→haproxy migration (optional, remove after migration)
-    # secondaryWebIngressClass:  # mapped in fasit
-    # secondaryApiIngressClass:  # mapped in fasit
 
     # Unleash web oauth config
     # webOAuthJWTAudience: # mapped in fasit
@@ -69,11 +66,6 @@ backend:
   google: {}
     # projectId:  # mapped in fasit
     # serviceAccountEmail:  # mapped in fasit
-
-  teams:
-    apiUrl: https://console.nav.cloud.nais.io/graphql
-    # apiToken:  # mapped in fasit
-    apiTokenSecretKey: token
 
 nameOverride: ""
 fullnameOverride: ""

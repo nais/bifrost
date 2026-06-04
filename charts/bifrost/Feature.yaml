@@ -18,19 +18,9 @@ values:
   backend.image.tag:
     config:
       type: string
-  backend.teams.apiToken:
-    displayName: Teams API key for Bifrost backend
-    computed:
-      template: '"{{ .Management.bifrost_teams_api_key }}"'
-  backend.teams.apiUrl:
-    computed:
-      template: '"https://{{ subdomain . "console" }}/graphql"'
+
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class
-    computed:
-      template: '"nais-ingress"'
-  backend.unleash.secondaryApiIngressClass:
-    displayName: Secondary Api Ingress Class (haproxy migration)
     computed:
       template: '"internal-haproxy"'
   backend.unleash.apiIngressHost:
@@ -97,6 +87,7 @@ values:
     displayName: Unleash sql instance region
     computed:
       template: '"{{ .Management.bifrost_unleash_sql_instance_region }}"'
+
   backend.unleash.teamsApiToken:
     displayName: Teams API key for Unleash instances
     computed:
@@ -106,10 +97,6 @@ values:
       template: '"https://{{ subdomain . "console" }}/graphql"'
   backend.unleash.webIngressClass:
     displayName: Web Ingress Class
-    computed:
-      template: '"nais-ingress-fa"'
-  backend.unleash.secondaryWebIngressClass:
-    displayName: Secondary Web Ingress Class (haproxy migration)
     computed:
       template: '"external-fa-haproxy"'
   backend.unleash.webIngressHost:

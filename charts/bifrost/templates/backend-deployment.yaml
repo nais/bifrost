@@ -52,14 +52,6 @@ spec:
             # Google
             - name: BIFROST_GOOGLE_PROJECT_ID
               value: {{ .Values.backend.google.projectId | quote }}
-            # Teams
-            - name: BIFROST_TEAMS_API_URL
-              value: {{ .Values.backend.teams.apiUrl | quote }}
-            - name: BIFROST_TEAMS_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "bifrost.fullname" . }}-backend
-                  key: {{ .Values.backend.teams.apiTokenSecretKey }}
             # Unleash
             - name: BIFROST_UNLEASH_SQL_INSTANCE_ID
               value: {{ .Values.backend.unleash.sqlInstanceId | required ".unleash.sqlInstanceId is required" | quote }}
@@ -79,14 +71,6 @@ spec:
               value: {{ .Values.backend.unleash.apiIngressClass | required ".unleash.apiIngressClass is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST
               value: {{ .Values.backend.unleash.apiIngressHost | required ".unleash.apiIngressHost is required" | quote }}
-            {{- if .Values.backend.unleash.secondaryWebIngressClass }}
-            - name: BIFROST_UNLEASH_INSTANCE_SECONDARY_WEB_INGRESS_CLASS
-              value: {{ .Values.backend.unleash.secondaryWebIngressClass | quote }}
-            {{- end }}
-            {{- if .Values.backend.unleash.secondaryApiIngressClass }}
-            - name: BIFROST_UNLEASH_INSTANCE_SECONDARY_API_INGRESS_CLASS
-              value: {{ .Values.backend.unleash.secondaryApiIngressClass | quote }}
-            {{- end }}
             - name: BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE
               value: {{ .Values.backend.unleash.webOAuthJWTAudience | required ".unleash.webOAuthJWTAudience is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL

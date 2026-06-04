@@ -16,9 +16,6 @@ backend:
     apiIngressClass: foo
     apiIngressHost: foo.bar
 
-    # Secondary ingress classes (haproxy migration)
-    secondaryWebIngressClass: bar
-    secondaryApiIngressClass: baz
 
     teamsApiToken: foo
 
@@ -34,9 +31,6 @@ backend:
     projectNumber: 123
     serviceAccountEmail: foo@bar
     iapBackendServiceId: 123
-
-  teams:
-    apiToken: foo
 
 ingress:
   host: foo.bar

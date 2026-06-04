@@ -227,19 +227,18 @@ func Run(config *config.Config) {
 	var migrationCancel context.CancelFunc
 	var channelMigrationCancel context.CancelFunc
 
-	// Reconcile extra ingresses for existing instances on startup
-	if config.Unleash.HasSecondaryWebIngressClass() || config.Unleash.HasSecondaryAPIIngressClass() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-			if unleashRepo, ok := repo.(*kubernetes.UnleashRepository); ok {
-				if err := unleashRepo.ReconcileAllExtraIngresses(ctx); err != nil {
-					logger.WithError(err).Warn("Failed to reconcile extra ingresses on startup")
-				}
+	// Re-apply the configured ingress classes to existing Unleash instances.
+	// Unleasherator renders ingressClassName from each CRD's spec, so existing
+	// instances keep their old class until their CRD is updated.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if unleashRepo, ok := repo.(*kubernetes.UnleashRepository); ok {
+			if err := unleashRepo.ReconcileIngressClasses(ctx); err != nil {
+				logger.WithError(err).Warn("Failed to reconcile ingress classes on startup")
 			}
-		}()
-		logger.Info("Extra ingress reconciler started in background")
-	}
+		}
+	}()
 
 	if config.Unleash.MigrationEnabled {
 		var migrationCtx context.Context
