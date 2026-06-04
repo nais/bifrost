@@ -216,6 +216,51 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) err
 	return nil
 }
 
+// ReconcileIngressClasses re-applies the configured web and api ingress classes
+// to all existing Unleash instances.
+//
+// Unleasherator renders each ingress' ingressClassName directly from the Unleash
+// CRD's spec.webIngress.class / spec.apiIngress.class and has no controller-side
+// default. A configured class change therefore only reaches an instance once its
+// CRD spec is updated, so existing instances keep their old class until this runs.
+func (r *UnleashRepository) ReconcileIngressClasses(ctx context.Context) error {
+	crds, err := r.ListCRDs(ctx, false)
+	if err != nil {
+		return fmt.Errorf("failed to list unleash instances for ingress class reconciliation: %w", err)
+	}
+
+	webClass := r.config.Unleash.InstanceWebIngressClass
+	apiClass := r.config.Unleash.InstanceAPIIngressClass
+
+	var errs []error
+	updated := 0
+	for i := range crds {
+		crd := &crds[i]
+		if crd.Spec.WebIngress.Class == webClass && crd.Spec.ApiIngress.Class == apiClass {
+			continue
+		}
+
+		patch := ctrl.MergeFrom(crd.DeepCopy())
+		crd.Spec.WebIngress.Class = webClass
+		crd.Spec.ApiIngress.Class = apiClass
+		if err := r.kubeClient.Patch(ctx, crd, patch); err != nil {
+			errs = append(errs, fmt.Errorf("instance %s: %w", crd.Name, err))
+			continue
+		}
+		updated++
+	}
+
+	r.logger.WithContext(ctx).WithFields(logrus.Fields{
+		"instanceCount": len(crds),
+		"updated":       updated,
+	}).Info("Reconciled ingress classes for existing instances")
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors reconciling ingress classes: %v", errs)
+	}
+	return nil
+}
+
 // Delete removes an Unleash instance
 func (r *UnleashRepository) Delete(ctx context.Context, name string) error {
 	// Delete FQDN network policy
