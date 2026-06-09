@@ -1,7 +1,6 @@
 dependencies:
   - allOf:
-      - loadbalancer
-      - monitoring
+      - monitoring-crds
 
 environmentKinds:
   - management
