@@ -18,9 +18,10 @@ spec:
           consequence: "Applications may experience slow response times from Unleash API and UI."
           action: |
             {{ "Check the database for slow queries and add indexes where appropriate." }}
+
     - name: unleash_http_alerts
       rules:
-      - alert: UnleashUnsuccessfulRequests
+      - alert: UnleashUnsuccessfulNginxRequests
         expr: sum(rate(nginx_ingress_controller_requests{namespace="{{ .Values.backend.unleash.instanceNamespace }}", status=~"5.."}[5m])) / sum(rate(nginx_ingress_controller_requests{namespace="{{ .Values.backend.unleash.instanceNamespace }}"}[5m])) > 0.05
         for: 5m
         labels:
@@ -30,6 +31,18 @@ spec:
           summary: "High rate of unsuccessful requests for Nginx Ingress Controller"
           consequence: "Applications may problems fetching feature toggles from Unleash or taking actions in the Unleash UI."
           action: "Check the Nginx Ingress Controller logs request endpoints for errors and investigate the root cause of the issue."
+
+      - alert: UnleashUnsuccessfulRequests
+        expr: sum(rate(haproxy_backend_http_responses_total{proxy=~"{{ .Values.backend.unleash.instanceNamespace | replace "-" "_" }}_svc_.+", code=~"4xx|5xx"}[5m])) / sum(rate(haproxy_backend_http_responses_total{proxy="{{ .Values.backend.unleash.instanceNamespace | replace "-" "_" }}_svc_.+"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "High rate of unsuccessful requests for HAProxy Ingress Controller"
+          consequence: "Applications may problems fetching feature toggles from Unleash or taking actions in the Unleash UI."
+          action: "Check the HAProxy Ingress Controller logs request endpoints for errors and investigate the root cause of the issue."
+
     - name: unleasherator_alerts
       rules:
       - alert: UnleasheratorConnectionProblem
