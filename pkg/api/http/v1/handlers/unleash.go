@@ -15,6 +15,7 @@ import (
 	domainunleash "github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // Unleash type alias for swagger documentation
@@ -338,23 +339,34 @@ func (h *UnleashHandler) DeleteInstance(c *gin.Context) {
 	ctx := c.Request.Context()
 	name := c.Param("name")
 
-	_, err := h.service.Get(ctx, name)
-	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Warn("Instance not found")
-		c.JSON(http.StatusNotFound, ErrorResponse{
-			Error:      "not_found",
-			Message:    "Instance not found",
-			Details:    map[string]string{"name": name},
-			StatusCode: http.StatusNotFound,
+	_, getErr := h.service.Get(ctx, name)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		h.logger.WithContext(ctx).WithError(getErr).WithField("name", name).Error("Failed to look up instance for deletion")
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:      "deletion_failed",
+			StatusCode: http.StatusInternalServerError,
 		})
 		return
 	}
 
+	// Run best-effort teardown even when the CRD is already gone, so a database,
+	// user, or secret orphaned by a prior partial failure is still reaped.
 	if err := h.service.Delete(ctx, name); err != nil {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Failed to delete instance")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:      "deletion_failed",
 			StatusCode: http.StatusInternalServerError,
+		})
+		return
+	}
+
+	// Preserve the existing 404 contract when nothing was there to begin with.
+	if apierrors.IsNotFound(getErr) {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Error:      "not_found",
+			Message:    "Instance not found",
+			Details:    map[string]string{"name": name},
+			StatusCode: http.StatusNotFound,
 		})
 		return
 	}

@@ -2,12 +2,19 @@ package unleash
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
+
+// cleanupTimeout bounds best-effort rollback/teardown, which runs on a context
+// detached from the request so it completes even if the caller disconnected.
+const cleanupTimeout = 5 * time.Minute
 
 // IService defines the interface for unleash instance management operations
 type IService interface {
@@ -68,38 +75,83 @@ func (s *Service) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, 
 	return s.repository.GetCRD(ctx, name)
 }
 
-// Create creates a new unleash instance with its database and resources
-func (s *Service) Create(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error) {
+// Create creates a new unleash instance with its database and resources.
+//
+// Provisioning spans Cloud SQL (database + user) and Kubernetes (secret + CRD)
+// with no cross-system transaction, so any step failing partway used to orphan
+// the resources created before it. Create now rolls back everything it created
+// on failure, so a failed create leaves no orphaned database, user, secret, or
+// CRD behind. Rollback runs on a detached, bounded context so it completes even
+// if the request context was cancelled.
+func (s *Service) Create(ctx context.Context, config *unleash.Config) (crd *unleashv1.Unleash, err error) {
+	name := config.Name
+
+	var dbCreated, userCreated, secretCreated, crdCreated bool
+	defer func() {
+		if err == nil {
+			return
+		}
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		log := s.logger.WithContext(ctx).WithField("instance", name)
+		log.WithError(err).Warn("Create failed, rolling back partially-created resources")
+
+		// Reverse order of creation; drop the database before the user it owns.
+		if crdCreated {
+			if e := s.repository.Delete(cctx, name); e != nil && !apierrors.IsNotFound(e) {
+				log.WithError(e).Error("Rollback: failed to delete unleash CRD")
+			}
+		}
+		if secretCreated {
+			if e := s.dbManager.DeleteSecret(cctx, name); e != nil {
+				log.WithError(e).Error("Rollback: failed to delete credentials secret")
+			}
+		}
+		if dbCreated {
+			if e := s.dbManager.DeleteDatabase(cctx, name); e != nil {
+				log.WithError(e).Error("Rollback: failed to delete database")
+			}
+		}
+		if userCreated {
+			if e := s.dbManager.DeleteDatabaseUser(cctx, name); e != nil {
+				log.WithError(e).Error("Rollback: failed to delete database user")
+			}
+		}
+	}()
+
 	// Create database
-	if err := s.dbManager.CreateDatabase(ctx, config.Name); err != nil {
+	if err = s.dbManager.CreateDatabase(ctx, name); err != nil {
 		return nil, err
 	}
+	dbCreated = true
 
 	// Create database user
-	password, err := s.dbManager.CreateDatabaseUser(ctx, config.Name)
-	if err != nil {
+	var password string
+	if password, err = s.dbManager.CreateDatabaseUser(ctx, name); err != nil {
 		return nil, err
 	}
+	userCreated = true
 
 	// Create secret with credentials
-	if err := s.dbManager.CreateSecret(ctx, config.Name, password); err != nil {
+	if err = s.dbManager.CreateSecret(ctx, name, password); err != nil {
 		return nil, err
 	}
+	secretCreated = true
 
 	// Create unleash instance in Kubernetes
-	if err := s.repository.Create(ctx, config); err != nil {
+	if err = s.repository.Create(ctx, config); err != nil {
 		return nil, err
 	}
+	crdCreated = true
 
 	// Retrieve the created CRD to return
-	crd, err := s.getCRD(ctx, config.Name)
-	if err != nil {
+	if crd, err = s.getCRD(ctx, name); err != nil {
 		return nil, err
 	}
 
 	s.logger.WithContext(ctx).WithFields(logrus.Fields{
 		"operation":      "create_unleash",
-		"instance":       config.Name,
+		"instance":       name,
 		"version_source": config.VersionSource(),
 	}).Info("Created unleash instance")
 
@@ -141,25 +193,34 @@ func (s *Service) Update(ctx context.Context, config *unleash.Config) (*unleashv
 	return crd, nil
 }
 
-// Delete deletes an unleash instance and its resources
+// Delete deletes an unleash instance and its resources.
+//
+// Deletion is best-effort and idempotent: every step is attempted regardless of
+// earlier failures (errors are aggregated), and each underlying operation treats
+// an already-absent resource as success. This means a transient failure in one
+// step no longer skips the remaining teardown and orphans the database/user, and
+// the call can be safely retried to reap anything left behind.
 func (s *Service) Delete(ctx context.Context, name string) error {
-	// Delete in reverse order of creation
-	if err := s.repository.Delete(ctx, name); err != nil {
-		return err
-	}
+	var errs []error
 
+	// Delete the CRD first to stop the workload, then its credentials secret.
+	if err := s.repository.Delete(ctx, name); err != nil && !apierrors.IsNotFound(err) {
+		errs = append(errs, err)
+	}
 	if err := s.dbManager.DeleteSecret(ctx, name); err != nil {
-		return err
+		errs = append(errs, err)
 	}
-
-	// Delete database before user to avoid dependency errors
-	// (PostgreSQL won't let you drop a user that owns database objects)
+	// Delete the database before the user to avoid dependency errors
+	// (PostgreSQL won't let you drop a user that owns database objects).
 	if err := s.dbManager.DeleteDatabase(ctx, name); err != nil {
-		return err
+		errs = append(errs, err)
+	}
+	if err := s.dbManager.DeleteDatabaseUser(ctx, name); err != nil {
+		errs = append(errs, err)
 	}
 
-	if err := s.dbManager.DeleteDatabaseUser(ctx, name); err != nil {
-		return err
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 
 	s.logger.WithContext(ctx).WithFields(logrus.Fields{
