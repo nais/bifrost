@@ -11,6 +11,20 @@ backend:
   logLevel: info
   logFormat: json
 
+  # API authentication. Bifrost is called only by nais-api; auth is a pre-shared
+  # key held in fasit and injected into both. Ships in accept-then-enforce mode.
+  auth:
+    # Comma-separated pre-shared keys (multiple allow zero-downtime rotation).
+    # Mapped from fasit; empty means authentication is effectively disabled.
+    apiKeys: ""  # mapped in fasit
+    # When true, requests without a valid key are rejected with 401. Keep false
+    # until nais-api is confirmed sending the key, then flip to true.
+    enforced: false
+    # Name/key of the Secret (created by this chart when apiKeys is set) that
+    # holds the keys and is mounted into bifrost's env as BIFROST_API_KEYS.
+    secretName: bifrost-api-key
+    secretKey: api-keys
+
   unleash:
     # Kubernetes namespace to create unleash instances in
     # instanceNamespace:  # mapped in fasit

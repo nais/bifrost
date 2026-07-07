@@ -18,6 +18,16 @@ values:
     config:
       type: string
 
+  # API authentication (pre-shared key shared with nais-api).
+  backend.auth.apiKeys:
+    displayName: Bifrost API pre-shared key(s)
+    computed:
+      template: '"{{ .Management.bifrost_api_key }}"'
+  backend.auth.enforced:
+    displayName: Enforce API authentication (reject unauthenticated requests)
+    config:
+      type: bool
+
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class
     computed:

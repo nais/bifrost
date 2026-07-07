@@ -21,6 +21,7 @@ import (
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	admin "google.golang.org/api/sqladmin/v1beta4"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,13 +31,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func initGoogleClients(ctx context.Context) (*admin.InstancesService, *admin.DatabasesService, *admin.UsersService, error) {
+func initGoogleClients(ctx context.Context) (*admin.InstancesService, *admin.DatabasesService, *admin.UsersService, *admin.OperationsService, error) {
 	googleClient, err := admin.NewService(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
-	return googleClient.Instances, googleClient.Databases, googleClient.Users, nil
+	return googleClient.Instances, googleClient.Databases, googleClient.Users, googleClient.Operations, nil
 }
 
 func initKubernetesClient() (ctrl.Client, error) {
@@ -149,12 +150,17 @@ func jsonLoggerMiddleware(logger *logrus.Logger, skipPaths []string) gin.Handler
 func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleashapp.Service, releaseChannelRepo releasechannel.Repository) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
-	router.Use(jsonLoggerMiddleware(logger, []string{"/healthz"}))
+	router.Use(jsonLoggerMiddleware(logger, []string{"/healthz", "/metrics"}))
 
 	// Health check
 	router.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "OK")
 	})
+
+	// Prometheus metrics. Registered before the auth middleware below so it is
+	// scrapeable without a key. Drives the dark-launch dashboards
+	// (bifrost_api_auth_requests_total{outcome=...}).
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Serve OpenAPI specification (JSON format from embedded spec)
 	router.GET("/openapi.json", func(c *gin.Context) {
@@ -170,8 +176,16 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 	// Create OpenAPI handler
 	openAPIHandler := v1.NewOpenAPIHandler(v1Service, config, logger, releaseChannelRepo)
 
-	// Register API routes (paths already include /v1 prefix)
+	// Register API routes (paths already include /v1 prefix).
+	// The auth and apiVersion middleware are attached here so they apply to the
+	// API routes but not to the health/openapi endpoints registered above.
 	router.Use(apiVersionMiddleware("v1"))
+	router.Use(apiKeyAuthMiddleware(
+		config.Server.Auth.ParsedAPIKeys(),
+		config.Server.Auth.Enforced,
+		logger,
+		[]string{"/healthz", "/openapi.json"},
+	))
 	generated.RegisterHandlers(router, openAPIHandler)
 
 	return router
@@ -198,18 +212,29 @@ func validateDefaultReleaseChannel(ctx context.Context, config *config.Config, r
 func Run(config *config.Config) {
 	logger := initLogger()
 
+	// Fail closed on a misconfiguration where auth is enforced but no keys are
+	// set — otherwise every request would be rejected.
+	if config.Server.Auth.Enforced && len(config.Server.Auth.ParsedAPIKeys()) == 0 {
+		logger.Fatal("BIFROST_AUTH_ENFORCED is true but no API keys are configured (set BIFROST_API_KEYS)")
+	}
+	if len(config.Server.Auth.ParsedAPIKeys()) == 0 {
+		logger.Warn("No API keys configured (BIFROST_API_KEYS); API authentication is effectively disabled")
+	} else if !config.Server.Auth.Enforced {
+		logger.Warn("API keys configured but BIFROST_AUTH_ENFORCED is false; running in accept-then-enforce mode")
+	}
+
 	kubeClient, err := initKubernetesClient()
 	if err != nil {
 		logger.Fatal(err)
 	}
 
-	_, sqlDatabasesClient, sqlUsersClient, err := initGoogleClients(context.Background())
+	_, sqlDatabasesClient, sqlUsersClient, sqlOperationsClient, err := initGoogleClients(context.Background())
 	if err != nil {
 		logger.Fatal(err)
 	}
 
 	// Create v1 service
-	dbManager := cloudsql.NewManager(sqlDatabasesClient, sqlUsersClient, kubeClient, config, logger)
+	dbManager := cloudsql.NewManager(sqlDatabasesClient, sqlUsersClient, sqlOperationsClient, kubeClient, config, logger)
 	repo := kubernetes.NewUnleashRepository(kubeClient, config, logger)
 	unleashService := unleashapp.NewService(repo, dbManager, config, logger)
 
