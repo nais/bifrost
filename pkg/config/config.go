@@ -134,6 +134,11 @@ type ReconcilerConfig struct {
 	// Enabled turns on the reconcile loop. Default off so it can be rolled out
 	// per environment behind a feature flag.
 	Enabled bool `env:"BIFROST_RECONCILER_ENABLED,default=false"`
+	// DryRun runs the loop in observe mode: it computes and records (via the
+	// bifrost_reconciler_actions_total{action="would_change"} metric) what it
+	// would change but never writes. This is the dark-launch step — enable the
+	// reconciler with DryRun on, confirm the blast radius, then set it false.
+	DryRun bool `env:"BIFROST_RECONCILER_DRY_RUN,default=false"`
 	// ResyncInterval is how often every managed instance is re-rendered even
 	// without a CR event, so global-config changes propagate and drift heals.
 	ResyncInterval time.Duration `env:"BIFROST_RECONCILER_RESYNC_INTERVAL,default=10m"`
