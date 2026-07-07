@@ -54,10 +54,12 @@ func (f *fakeDBManager) DeleteDatabase(_ context.Context, _ string) error {
 	}
 	return nil
 }
+
 func (f *fakeDBManager) DeleteDatabaseUser(_ context.Context, _ string) error {
 	f.record("DeleteDatabaseUser")
 	return nil
 }
+
 func (f *fakeDBManager) DeleteSecret(_ context.Context, _ string) error {
 	f.record("DeleteSecret")
 	return nil
@@ -77,6 +79,7 @@ func (f *fakeRepo) ListCRDs(context.Context, bool) ([]unleashv1.Unleash, error) 
 func (f *fakeRepo) Get(context.Context, string) (*unleash.Instance, error) {
 	return &unleash.Instance{}, nil
 }
+
 func (f *fakeRepo) GetCRD(context.Context, string) (*unleashv1.Unleash, error) {
 	return &unleashv1.Unleash{}, nil
 }
