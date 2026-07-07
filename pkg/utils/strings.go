@@ -1,7 +1,9 @@
 package utils
 
 import (
-	"math/rand"
+	crand "crypto/rand"
+	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -28,6 +30,9 @@ func JoinNoEmpty(s []string, sep string) string {
 	return strings.Join(s, sep)
 }
 
+// RandomString returns a cryptographically-random string of length n over
+// [a-z0-9]. It is used for security-relevant values such as the federation
+// secret nonce, so it must not use a predictable (math/rand) source.
 func RandomString(n int) string {
 	const letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -38,6 +43,16 @@ func RandomString(n int) string {
 	return string(b)
 }
 
+// RandomInt returns a cryptographically-random int in [min, max) using unbiased
+// rejection sampling via crypto/rand. It panics only if the system CSPRNG is
+// unavailable, which is not a recoverable condition for a security primitive.
 func RandomInt(min, max int) int {
-	return min + rand.Intn(max-min)
+	if max <= min {
+		return min
+	}
+	r, err := crand.Int(crand.Reader, big.NewInt(int64(max-min)))
+	if err != nil {
+		panic(fmt.Sprintf("crypto/rand failure: %v", err))
+	}
+	return min + int(r.Int64())
 }
