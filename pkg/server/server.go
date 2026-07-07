@@ -19,6 +19,7 @@ import (
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	"github.com/nais/bifrost/pkg/infrastructure/cloudsql"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
+	"github.com/nais/bifrost/pkg/reconciler"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
@@ -270,6 +271,24 @@ func Run(config *config.Config) {
 		logger.Info("Channel migration reconciler started in background")
 	}
 
+	// Start the controller-runtime reconcile loop if enabled. It continuously
+	// converges bifrost-managed Unleash instances to their desired config.
+	var reconcilerCancel context.CancelFunc
+	if config.Reconciler.Enabled {
+		mgr, err := reconciler.NewManager(config, logger)
+		if err != nil {
+			logger.Fatal(err)
+		}
+		var reconcilerCtx context.Context
+		reconcilerCtx, reconcilerCancel = context.WithCancel(context.Background())
+		go func() {
+			logger.Info("Starting Unleash reconciler manager")
+			if err := mgr.Start(reconcilerCtx); err != nil {
+				logger.WithError(err).Error("Unleash reconciler manager stopped with error")
+			}
+		}()
+	}
+
 	// Setup signal handler to gracefully shutdown migration reconcilers
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
@@ -298,6 +317,10 @@ func Run(config *config.Config) {
 	if channelMigrationCancel != nil {
 		logger.Info("Shutting down channel migration reconciler")
 		channelMigrationCancel()
+	}
+	if reconcilerCancel != nil {
+		logger.Info("Shutting down Unleash reconciler manager")
+		reconcilerCancel()
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

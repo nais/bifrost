@@ -128,11 +128,29 @@ func (c *UnleashConfig) ParseChannelMigrationMap() (map[string]string, error) {
 	return result, nil
 }
 
+// ReconcilerConfig configures the controller-runtime reconcile loop that keeps
+// bifrost-managed Unleash instances converged to their desired configuration.
+type ReconcilerConfig struct {
+	// Enabled turns on the reconcile loop. Default off so it can be rolled out
+	// per environment behind a feature flag.
+	Enabled bool `env:"BIFROST_RECONCILER_ENABLED,default=false"`
+	// ResyncInterval is how often every managed instance is re-rendered even
+	// without a CR event, so global-config changes propagate and drift heals.
+	ResyncInterval time.Duration `env:"BIFROST_RECONCILER_RESYNC_INTERVAL,default=10m"`
+	// LeaderElection ensures at most one replica reconciles. Requires lease RBAC;
+	// keep off while running a single replica.
+	LeaderElection bool `env:"BIFROST_RECONCILER_LEADER_ELECTION,default=false"`
+	// LeaderElectionNamespace is where the lease lives; empty auto-detects the
+	// pod namespace in-cluster.
+	LeaderElectionNamespace string `env:"BIFROST_RECONCILER_LEADER_ELECTION_NAMESPACE"`
+}
+
 type Config struct {
 	Meta                MetaConfig
 	Server              ServerConfig
 	Google              GoogleConfig
 	Unleash             UnleashConfig
+	Reconciler          ReconcilerConfig
 	DebugMode           bool
 	CloudConnectorProxy string `env:"BIFROST_CLOUD_CONNECTOR_PROXY_IMAGE,default=gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.1.0"`
 }
