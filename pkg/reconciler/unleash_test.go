@@ -9,6 +9,7 @@ import (
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -48,7 +49,7 @@ func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
 func newReconciler(c client.Client) *UnleashReconciler {
 	logger := logrus.New()
 	logger.SetOutput(nopWriter{})
-	return NewUnleashReconciler(c, testConfig(), logger, time.Minute)
+	return NewUnleashReconciler(c, testConfig(), logger, time.Minute, false)
 }
 
 func requestFor(crd *unleashv1.Unleash) ctrl.Request {
@@ -131,6 +132,41 @@ func TestReconcile_NoOpWhenInSync(t *testing.T) {
 	}
 	if before.ResourceVersion != after.ResourceVersion {
 		t.Errorf("in-sync reconcile issued a write (RV %s -> %s)", before.ResourceVersion, after.ResourceVersion)
+	}
+}
+
+func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
+	desired := renderManaged("team-d")
+	drifted := desired.DeepCopy()
+	drifted.Spec.ApiIngress.Class = "DRIFTED"
+
+	c := newFakeClient(t, drifted)
+	logger := logrus.New()
+	logger.SetOutput(nopWriter{})
+	r := NewUnleashReconciler(c, testConfig(), logger, time.Minute, true) // dry-run
+
+	before := &unleashv1.Unleash{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: drifted.Namespace, Name: "team-d"}, before); err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+	wouldChangeBefore := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange))
+
+	if _, err := r.Reconcile(context.Background(), requestFor(drifted)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	after := &unleashv1.Unleash{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: drifted.Namespace, Name: "team-d"}, after); err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if before.ResourceVersion != after.ResourceVersion {
+		t.Errorf("dry-run must not write (RV %s -> %s)", before.ResourceVersion, after.ResourceVersion)
+	}
+	if after.Spec.ApiIngress.Class != "DRIFTED" {
+		t.Errorf("dry-run changed the object: class = %q", after.Spec.ApiIngress.Class)
+	}
+	if got := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange)); got != wouldChangeBefore+1 {
+		t.Errorf("would_change counter = %v, want %v", got, wouldChangeBefore+1)
 	}
 }
 

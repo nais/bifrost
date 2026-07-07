@@ -46,7 +46,7 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 		return nil, fmt.Errorf("create manager: %w", err)
 	}
 
-	r := NewUnleashReconciler(mgr.GetClient(), cfg, logger, cfg.Reconciler.ResyncInterval)
+	r := NewUnleashReconciler(mgr.GetClient(), cfg, logger, cfg.Reconciler.ResyncInterval, cfg.Reconciler.DryRun)
 	if err := r.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("set up reconciler: %w", err)
 	}

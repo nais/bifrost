@@ -32,15 +32,17 @@ type UnleashReconciler struct {
 	config *config.Config
 	logger *logrus.Logger
 	resync time.Duration
+	dryRun bool
 }
 
 // NewUnleashReconciler creates a reconciler. A non-positive resync falls back to
-// the default interval.
-func NewUnleashReconciler(c client.Client, cfg *config.Config, logger *logrus.Logger, resync time.Duration) *UnleashReconciler {
+// the default interval. When dryRun is true the reconciler runs in observe mode:
+// it computes and records what it would change but never writes.
+func NewUnleashReconciler(c client.Client, cfg *config.Config, logger *logrus.Logger, resync time.Duration, dryRun bool) *UnleashReconciler {
 	if resync <= 0 {
 		resync = defaultResyncInterval
 	}
-	return &UnleashReconciler{client: c, config: cfg, logger: logger, resync: resync}
+	return &UnleashReconciler{client: c, config: cfg, logger: logger, resync: resync, dryRun: dryRun}
 }
 
 // Reconcile renders the desired spec from the instance's intent and patches the
@@ -80,6 +82,15 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	desired := kubernetes.BuildUnleashCRD(r.config, cfg)
 
 	if r.inSync(crd, &desired) {
+		reconcilerActionsTotal.WithLabelValues(actionInSync).Inc()
+		return ctrl.Result{RequeueAfter: r.resync}, nil
+	}
+
+	// Observe mode (dark launch): record that a change is needed but do not write,
+	// so the blast radius can be measured before the reconciler is allowed to act.
+	if r.dryRun {
+		reconcilerActionsTotal.WithLabelValues(actionWouldChange).Inc()
+		log.Info("Instance differs from desired configuration (dry-run: no changes applied)")
 		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
 
@@ -90,10 +101,12 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	applyManagedMetadata(crd, &desired)
 
 	if err := r.client.Patch(ctx, crd, client.MergeFrom(base)); err != nil {
+		reconcilerActionsTotal.WithLabelValues(actionError).Inc()
 		log.WithError(err).Error("Failed to patch instance toward desired configuration")
 		return ctrl.Result{}, err
 	}
 
+	reconcilerActionsTotal.WithLabelValues(actionChanged).Inc()
 	log.Info("Reconciled instance to desired configuration")
 	return ctrl.Result{RequeueAfter: r.resync}, nil
 }
