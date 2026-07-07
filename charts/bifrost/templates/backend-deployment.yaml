@@ -103,6 +103,14 @@ spec:
             - name: BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY
               value: {{ .Values.backend.unleash.channelMigration.delay | quote }}
             {{- end }}
+
+            # Reconciler (dark-launch via dry-run; see docs/RECONCILER_IMPROVEMENT_PLAN.md §6a).
+            - name: BIFROST_RECONCILER_ENABLED
+              value: {{ .Values.backend.reconciler.enabled | quote }}
+            - name: BIFROST_RECONCILER_DRY_RUN
+              value: {{ .Values.backend.reconciler.dryRun | quote }}
+            - name: BIFROST_RECONCILER_RESYNC_INTERVAL
+              value: {{ .Values.backend.reconciler.resyncInterval | quote }}
           ports:
             - name: http
               containerPort: 8080

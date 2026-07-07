@@ -754,6 +754,10 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 		server.Spec.ReleaseChannel.Name = cfg.ReleaseChannelName
 	}
 
+	// Mark the instance as bifrost-managed and record the intent it was rendered
+	// from, so the reconciler can find and re-render it non-lossily.
+	stampManagedMetadata(&server, cfg)
+
 	return server
 }
 
