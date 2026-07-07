@@ -53,11 +53,13 @@ func apiKeyAuthMiddleware(keys []string, enforced bool, logger *logrus.Logger, s
 		}
 
 		if validAPIKey(extractAPIKey(c), keys) {
+			apiAuthRequestsTotal.WithLabelValues(authOutcomeAuthenticated).Inc()
 			c.Next()
 			return
 		}
 
 		if enforced {
+			apiAuthRequestsTotal.WithLabelValues(authOutcomeRejected).Inc()
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":       "unauthorized",
 				"message":     "missing or invalid API key",
@@ -66,6 +68,10 @@ func apiKeyAuthMiddleware(keys []string, enforced bool, logger *logrus.Logger, s
 			return
 		}
 
+		// Dark-launch / accept mode: allow but record so the rollout is
+		// measurable. When bifrost_api_auth_requests_total{outcome="unauthenticated_allowed"}
+		// reaches zero, it is safe to flip BIFROST_AUTH_ENFORCED to true.
+		apiAuthRequestsTotal.WithLabelValues(authOutcomeUnauthenticated).Inc()
 		logger.WithFields(logrus.Fields{
 			"event":     "unauthenticated_request",
 			"path":      c.Request.URL.Path,

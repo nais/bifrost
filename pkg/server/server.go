@@ -21,6 +21,7 @@ import (
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	admin "google.golang.org/api/sqladmin/v1beta4"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -149,12 +150,17 @@ func jsonLoggerMiddleware(logger *logrus.Logger, skipPaths []string) gin.Handler
 func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleashapp.Service, releaseChannelRepo releasechannel.Repository) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
-	router.Use(jsonLoggerMiddleware(logger, []string{"/healthz"}))
+	router.Use(jsonLoggerMiddleware(logger, []string{"/healthz", "/metrics"}))
 
 	// Health check
 	router.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "OK")
 	})
+
+	// Prometheus metrics. Registered before the auth middleware below so it is
+	// scrapeable without a key. Drives the dark-launch dashboards
+	// (bifrost_api_auth_requests_total{outcome=...}).
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Serve OpenAPI specification (JSON format from embedded spec)
 	router.GET("/openapi.json", func(c *gin.Context) {

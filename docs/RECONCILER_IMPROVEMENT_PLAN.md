@@ -289,6 +289,41 @@ Each phase is independently shippable and leaves the system better than before.
   (`BIFROST_RECONCILER_ENABLED`, default off); enable in a non-prod tenant first; watch drift/apply
   metrics; then enable in prod with `replicas: 1` until leader election lands, then scale.
 
+## 6a. Progressive delivery — dark-launch every breaking change
+
+Every behaviour-changing rollout in bifrost follows the same SRE pattern so it can be ramped safely
+and rolled back instantly. **No breaking change goes straight to enforcing.**
+
+**The three-state ramp (off → observe → enforce):**
+
+1. **Off** — the new code path is not active. Default for every new toggle, so merging + deploying
+   changes nothing.
+2. **Observe (dark launch)** — the new path runs and is **measured**, but does not change behaviour:
+   it emits a metric (and a log) for what it *would* do. You ramp forward only on evidence.
+3. **Enforce** — the change takes effect. Reached only after the observe metrics say it is safe, and
+   reversible by flipping the toggle back.
+
+**Rules:**
+
+- **Measure before you enforce.** A dark launch that only logs is not enough — emit a Prometheus
+  counter so the decision is data-driven and alertable. You cannot ramp what you cannot see.
+- **Toggles are runtime + per-environment** (env vars driven by fasit `Feature.yaml`), so each
+  environment ramps independently and any toggle is an instant kill switch — no redeploy of code.
+- **Fail closed only after enforce; fail open (and count) while observing.**
+- **Name the metric after the decision** it informs, and alert on the "would-break" series reaching
+  a safe threshold (usually zero) as the go/no-go signal.
+
+**Applied to the current changes:**
+
+| Change | Off | Observe (dark launch) | Enforce | Go/no-go signal |
+| --- | --- | --- | --- | --- |
+| **PSK auth** | no keys configured | keys set, `BIFROST_AUTH_ENFORCED=false` (accept-then-enforce) — unauthenticated calls allowed **and counted** | `BIFROST_AUTH_ENFORCED=true` — 401 on missing key | `bifrost_api_auth_requests_total{outcome="unauthenticated_allowed"}` → 0 |
+| **Reconciler** | `BIFROST_RECONCILER_ENABLED=false` | enabled + `BIFROST_RECONCILER_DRY_RUN=true` — computes the diff, **counts** what it would change, patches nothing | `BIFROST_RECONCILER_DRY_RUN=false` — converges | `bifrost_reconciler_actions_total{action="would_change"}` understood/expected |
+
+Bifrost exposes `/metrics` (unauthenticated, scraped by the existing ServiceMonitor) for the API-side
+counters; the reconciler manager exposes its own counters on its metrics port. Build a dashboard per
+ramp before enabling observe mode.
+
 ## 7. Risks & mitigations
 
 - **Reconciler fighting unleasherator / release-channel controller.** Use server-side apply with a

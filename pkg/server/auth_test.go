@@ -6,8 +6,50 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 )
+
+// TestAPIKeyAuthMiddleware_RecordsOutcome verifies the dark-launch signal: every
+// non-exempt request increments bifrost_api_auth_requests_total with the outcome
+// operators watch to decide when it's safe to enforce.
+func TestAPIKeyAuthMiddleware_RecordsOutcome(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logger := logrus.New()
+	logger.SetOutput(nopWriter{})
+
+	do := func(enforced bool, header string) {
+		r := gin.New()
+		r.Use(apiKeyAuthMiddleware([]string{"k"}, enforced, logger, nil))
+		r.GET("/v1/x", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		r.ServeHTTP(w, req)
+	}
+
+	cases := []struct {
+		name     string
+		enforced bool
+		header   string
+		outcome  string
+	}{
+		{"authenticated", true, "Bearer k", authOutcomeAuthenticated},
+		{"rejected", true, "", authOutcomeRejected},
+		{"accept-mode", false, "", authOutcomeUnauthenticated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := testutil.ToFloat64(apiAuthRequestsTotal.WithLabelValues(tc.outcome))
+			do(tc.enforced, tc.header)
+			if got := testutil.ToFloat64(apiAuthRequestsTotal.WithLabelValues(tc.outcome)); got != before+1 {
+				t.Errorf("outcome %q counter = %v, want %v", tc.outcome, got, before+1)
+			}
+		})
+	}
+}
 
 func TestValidAPIKey(t *testing.T) {
 	keys := []string{"key-one", "key-two"}
