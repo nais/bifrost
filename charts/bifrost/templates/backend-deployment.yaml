@@ -103,6 +103,17 @@ spec:
             - name: BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY
               value: {{ .Values.backend.unleash.channelMigration.delay | quote }}
             {{- end }}
+
+            # API authentication (pre-shared key from nais-api). See docs/RECONCILER_IMPROVEMENT_PLAN.md.
+            - name: BIFROST_AUTH_ENFORCED
+              value: {{ .Values.backend.auth.enforced | quote }}
+            {{- if .Values.backend.auth.apiKeys }}
+            - name: BIFROST_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.auth.secretName }}
+                  key: {{ .Values.backend.auth.secretKey }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
