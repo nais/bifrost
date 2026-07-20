@@ -35,7 +35,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: nais/fasit-deploy@58a70a338b16dc646373c91724fc7e7522d085a4 # ratchet:nais/fasit-deploy@v4.0.1
+      - uses: nais/fasit-deploy@53e433b1bdd08fc622e03a78584c0832c9083bd3 # ratchet:nais/fasit-deploy@v4.1.1
         with:
           chart: oci://europe-north1-docker.pkg.dev/nais-io/nais/charts/${{ needs.build-and-deploy.outputs.name }}
           version: ${{ needs.build-and-deploy.outputs.version }}
