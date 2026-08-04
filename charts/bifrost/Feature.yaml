@@ -18,6 +18,16 @@ values:
     config:
       type: string
 
+  # Reconciler dark-launch toggles (off -> enabled+dryRun -> enabled).
+  backend.reconciler.enabled:
+    displayName: Enable the Unleash reconcile loop
+    config:
+      type: bool
+  backend.reconciler.dryRun:
+    displayName: Reconciler dry-run (observe only, no writes)
+    config:
+      type: bool
+
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class
     computed:

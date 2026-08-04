@@ -11,6 +11,14 @@ backend:
   logLevel: info
   logFormat: json
 
+  # Reconcile loop that converges managed Unleash instances to their desired
+  # config. Dark-launched: enable with dryRun=true first, watch
+  # bifrost_reconciler_actions_total{action="would_change"}, then set dryRun=false.
+  reconciler:
+    enabled: false
+    dryRun: false
+    resyncInterval: "10m"
+
   unleash:
     # Kubernetes namespace to create unleash instances in
     # instanceNamespace:  # mapped in fasit
