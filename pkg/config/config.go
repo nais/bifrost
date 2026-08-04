@@ -56,6 +56,37 @@ type ServerConfig struct {
 	IdleTimeout     int    `env:"BIFROST_IDLE_TIMEOUT,default=60"`
 	GracefulTimeout int    `env:"BIFROST_GRACEFUL_TIMEOUT,default=15"`
 	TemplatesDir    string `env:"BIFROST_TEMPLATE_DIR,default=./templates"`
+	Auth            AuthConfig
+}
+
+// AuthConfig configures pre-shared-key authentication for the bifrost API.
+// The bifrost API is called only by nais-api, which authenticates end users and
+// enforces team ownership itself; bifrost only needs to authenticate that the
+// caller is the trusted service. The key is provisioned in fasit and injected
+// into both bifrost and nais-api.
+type AuthConfig struct {
+	// APIKeys is a comma-separated list of accepted pre-shared keys. Multiple
+	// values allow zero-downtime key rotation (accept old and new at once).
+	APIKeys string `env:"BIFROST_API_KEYS"`
+	// Enforced controls whether requests without a valid key are rejected. It
+	// defaults to false ("accept-then-enforce"): the first rollout logs
+	// unauthenticated calls without blocking them so nais-api can start sending
+	// the key; a later rollout flips this to true to fail closed.
+	Enforced bool `env:"BIFROST_AUTH_ENFORCED,default=false"`
+}
+
+// ParsedAPIKeys returns the configured pre-shared keys, trimmed and non-empty.
+func (a AuthConfig) ParsedAPIKeys() []string {
+	if a.APIKeys == "" {
+		return nil
+	}
+	keys := make([]string, 0)
+	for _, k := range strings.Split(a.APIKeys, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 type GoogleConfig struct {
