@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,11 @@ func TestUnleashVersions(t *testing.T) {
 
 	githubApiUrl = server.URL
 
+	// Reset the cache so this test always fetches from its own test server.
+	versionsCacheMu.Lock()
+	versionsCache = nil
+	versionsCacheMu.Unlock()
+
 	versions, err := UnleashVersions()
 	assert.NoError(t, err)
 	assert.NotEmpty(t, versions)
@@ -62,6 +68,13 @@ func TestUnleashVersions(t *testing.T) {
 		assert.NotEmpty(t, version.VersionNumber)
 		assert.NotEqual(t, version.ReleaseTime, time.Time{})
 		assert.NotEmpty(t, version.CommitHash)
+	}
+
+	// Versions must be sorted newest-first, so callers taking index 0 get the
+	// latest release regardless of GitHub's tag ordering.
+	for i := 1; i < len(versions); i++ {
+		assert.False(t, versions[i-1].ReleaseTime.Before(versions[i].ReleaseTime),
+			"versions not sorted newest-first: %s before %s", versions[i-1].GitTag, versions[i].GitTag)
 	}
 }
 
@@ -177,7 +190,7 @@ func TestGetLatestTags(t *testing.T) {
 
 			githubApiUrl = server.URL
 
-			got, err := getLatestTags(tc.owner, tc.repo)
+			got, err := getLatestTags(context.Background(), tc.owner, tc.repo)
 
 			if tc.wantErr {
 				assert.Error(t, err)
