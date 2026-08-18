@@ -19,22 +19,24 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // MockDatabaseManager implements the DatabaseManager interface for testing
 type MockDatabaseManager struct{}
 
-func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) error {
-	return nil
+func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) (bool, error) {
+	return true, nil
 }
 
-func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, error) {
-	return "mock-password", nil
+func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, bool, error) {
+	return "mock-password", true, nil
 }
 
-func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) error {
-	return nil
+func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) (bool, error) {
+	return true, nil
 }
 
 func (m *MockDatabaseManager) DeleteDatabase(ctx context.Context, name string) error {
@@ -75,7 +77,10 @@ func (m *MockUnleashRepository) Get(ctx context.Context, name string) (*domainUn
 	if instance, ok := m.instances[name]; ok {
 		return instance, nil
 	}
-	return nil, errors.New("instance not found")
+	// Mirror the real repository, which wraps a Kubernetes NotFound. Callers
+	// distinguish "does not exist" from "could not tell", so a plain error
+	// here would exercise a path production never takes.
+	return nil, apierrors.NewNotFound(schema.GroupResource{Group: "unleash.nais.io", Resource: "unleashes"}, name)
 }
 
 func (m *MockUnleashRepository) Create(ctx context.Context, cfg *domainUnleash.Config) error {

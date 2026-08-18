@@ -15,6 +15,7 @@ import (
 	domainunleash "github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // Unleash type alias for swagger documentation
@@ -154,6 +155,35 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 			Error:      "validation_failed",
 			Details:    map[string]string{"reason": err.Error()},
 			StatusCode: http.StatusBadRequest,
+		})
+		return
+	}
+
+	// Refuse to provision over an instance that already exists. Without this a
+	// duplicate POST — a client retry, a double submit — runs the whole create
+	// path against live resources, and any failure along the way triggers a
+	// rollback that tears them down. Create must never touch an existing
+	// instance; updates go through PUT.
+	//
+	// Fail closed: only a definite NotFound means it is safe to provision. Any
+	// other read error is inconclusive, and treating it as "does not exist"
+	// would let a duplicate through during an API-server blip.
+	if _, err := h.service.Get(ctx, config.Name); err == nil {
+		h.logger.WithContext(ctx).WithField("name", config.Name).Warn("Instance already exists, refusing to create")
+		c.JSON(http.StatusConflict, ErrorResponse{
+			Error:      "already_exists",
+			Message:    "Instance already exists",
+			Details:    map[string]string{"name": config.Name},
+			StatusCode: http.StatusConflict,
+		})
+		return
+	} else if !apierrors.IsNotFound(err) {
+		h.logger.WithContext(ctx).WithError(err).WithField("name", config.Name).
+			Error("Could not determine whether the instance already exists")
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{
+			Error:      "existence_check_failed",
+			Message:    "Could not verify whether the instance already exists",
+			StatusCode: http.StatusServiceUnavailable,
 		})
 		return
 	}
@@ -338,23 +368,34 @@ func (h *UnleashHandler) DeleteInstance(c *gin.Context) {
 	ctx := c.Request.Context()
 	name := c.Param("name")
 
-	_, err := h.service.Get(ctx, name)
-	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Warn("Instance not found")
-		c.JSON(http.StatusNotFound, ErrorResponse{
-			Error:      "not_found",
-			Message:    "Instance not found",
-			Details:    map[string]string{"name": name},
-			StatusCode: http.StatusNotFound,
+	_, getErr := h.service.Get(ctx, name)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		h.logger.WithContext(ctx).WithError(getErr).WithField("name", name).Error("Failed to look up instance for deletion")
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:      "deletion_failed",
+			StatusCode: http.StatusInternalServerError,
 		})
 		return
 	}
 
+	// Run best-effort teardown even when the CRD is already gone, so a database,
+	// user, or secret orphaned by a prior partial failure is still reaped.
 	if err := h.service.Delete(ctx, name); err != nil {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Failed to delete instance")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:      "deletion_failed",
 			StatusCode: http.StatusInternalServerError,
+		})
+		return
+	}
+
+	// Preserve the existing 404 contract when nothing was there to begin with.
+	if apierrors.IsNotFound(getErr) {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Error:      "not_found",
+			Message:    "Instance not found",
+			Details:    map[string]string{"name": name},
+			StatusCode: http.StatusNotFound,
 		})
 		return
 	}

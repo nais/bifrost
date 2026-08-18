@@ -22,7 +22,9 @@ jobs:
     secrets:
       NAIS_IO_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.NAIS_IO_WORKLOAD_IDENTITY_PROVIDER }}
     with:
-      mise-tasks: ${{ github.event_name == 'pull_request' && '["tidy-check", "fmt-check", "generate-check", "lint", "vet", "check", "test"]' || '["tidy-check", "fmt-check", "generate-check", "lint", "vet", "check", "test-race"]' }}
+      # test-race in both lanes: concurrency regressions arrive in pull
+      # requests, and the guards for them are only reliable under -race.
+      mise-tasks: '["tidy-check", "fmt-check", "generate-check", "lint", "vet", "check", "test-race"]'
       builds-docker: true
       builds-chart: true
       creates-git-tag: true

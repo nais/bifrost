@@ -19,22 +19,24 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // MockDatabaseManager implements the DatabaseManager interface for testing
 type MockDatabaseManager struct{}
 
-func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) error {
-	return nil
+func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) (bool, error) {
+	return true, nil
 }
 
-func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, error) {
-	return "mock-password", nil
+func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, bool, error) {
+	return "mock-password", true, nil
 }
 
-func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) error {
-	return nil
+func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) (bool, error) {
+	return true, nil
 }
 
 func (m *MockDatabaseManager) DeleteDatabase(ctx context.Context, name string) error {
@@ -75,7 +77,10 @@ func (m *MockUnleashRepository) Get(ctx context.Context, name string) (*domainUn
 	if instance, ok := m.instances[name]; ok {
 		return instance, nil
 	}
-	return nil, errors.New("instance not found")
+	// Mirror the real repository, which wraps a Kubernetes NotFound. Callers
+	// distinguish "does not exist" from "could not tell", so a plain error
+	// here would exercise a path production never takes.
+	return nil, apierrors.NewNotFound(schema.GroupResource{Group: "unleash.nais.io", Resource: "unleashes"}, name)
 }
 
 func (m *MockUnleashRepository) Create(ctx context.Context, config *domainUnleash.Config) error {
@@ -961,4 +966,31 @@ func TestUpdateInstance_PreservesUnionOfDivergedLists(t *testing.T) {
 	require.NotNil(t, updated)
 	assert.Equal(t, "team-a,team-b", updated.AllowedTeams, "preserving must not drop either side")
 	assert.Equal(t, "team-a,team-b", updated.AllowedNamespaces)
+}
+
+// Create must refuse an instance that already exists. Without this, a duplicate
+// POST runs the whole provisioning path against live resources, and any failure
+// along the way triggers a rollback that tears them down.
+func TestCreateInstance_RefusesExistingInstance(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.instances["team-a"] = federatedInstance("team-a", "team-a")
+
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{Name: name, Image: "quay.io/unleash/unleash-server:5.10.0"}, nil
+		},
+	}
+	handler, router := setupUnleashTestHandler(repo, channelRepo)
+	router.POST("/unleash", handler.CreateInstance)
+
+	body, err := json.Marshal(map[string]any{"name": "team-a", "release_channel_name": "stable"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/unleash", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code, "Response: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "already_exists")
 }
