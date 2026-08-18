@@ -589,14 +589,24 @@ func LoadConfigFromCRD(crd *unleashv1.Unleash) *unleash.ConfigBuilder {
 		builder.WithReleaseChannel(crd.Spec.ReleaseChannel.Name)
 	}
 
+	// TEAMS_ALLOWED_TEAMS governs who may log in to the Unleash UI and exists
+	// whether or not the instance is federated. Reading it only in the
+	// federated branch meant a non-federated instance round-tripped to an empty
+	// list: the config this produces is written back as the authoritative
+	// desired-state annotation, so the loss became the recorded intent and the
+	// reconciler would enforce it on every resync.
+	allowedTeams := getEnvVar(crd, "TEAMS_ALLOWED_TEAMS", "")
+
 	// Extract federation config
 	if crd.Spec.Federation.Enabled {
 		builder.WithFederation(
 			crd.Spec.Federation.SecretNonce,
-			getEnvVar(crd, "TEAMS_ALLOWED_TEAMS", ""),
+			allowedTeams,
 			utils.JoinNoEmpty(crd.Spec.Federation.Namespaces, ","),
 			utils.JoinNoEmpty(crd.Spec.Federation.Clusters, ","),
 		)
+	} else {
+		builder.SetAllowedTeams(allowedTeams)
 	}
 
 	// Extract operational settings
