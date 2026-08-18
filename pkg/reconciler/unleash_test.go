@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -248,5 +249,66 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 	}
 	if live.ResourceVersion != stored.ResourceVersion {
 		t.Fatalf("in-sync reconcile must not write (resourceVersion %s → %s)", stored.ResourceVersion, live.ResourceVersion)
+	}
+}
+
+// The desired-state annotation is authoritative, so a valid-JSON-but-wrong
+// annotation would be rendered verbatim onto a live instance. Malformed JSON
+// already failed; these are the cases that used to get through.
+func TestResolveIntent_RejectsUnusableAnnotations(t *testing.T) {
+	cfg := testConfig()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	r := NewUnleashReconciler(nil, cfg, logger, time.Minute, true)
+
+	for _, tc := range []struct {
+		name, annotation, wantErr string
+	}{
+		{
+			name:       "empty object renders nothing usable",
+			annotation: `{}`,
+			wantErr:    "not a valid config",
+		},
+		{
+			name:       "annotation belonging to another instance",
+			annotation: `{"Name":"other-team","LogLevel":"warn","DatabasePoolMax":3}`,
+			wantErr:    "names \"other-team\"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			crd := &unleashv1.Unleash{}
+			crd.SetName("team-a")
+			crd.SetAnnotations(map[string]string{kubernetes.AnnotationDesiredState: tc.annotation})
+
+			_, err := r.resolveIntent(crd)
+			if err == nil {
+				t.Fatalf("expected an error for %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %q, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// A well-formed annotation for this instance must still be accepted.
+func TestResolveIntent_AcceptsValidAnnotation(t *testing.T) {
+	cfg := testConfig()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	r := NewUnleashReconciler(nil, cfg, logger, time.Minute, true)
+
+	crd := &unleashv1.Unleash{}
+	crd.SetName("team-a")
+	crd.SetAnnotations(map[string]string{
+		kubernetes.AnnotationDesiredState: `{"Name":"team-a","LogLevel":"warn","DatabasePoolMax":3,"ReleaseChannelName":"stable"}`,
+	})
+
+	got, err := r.resolveIntent(crd)
+	if err != nil {
+		t.Fatalf("valid annotation rejected: %v", err)
+	}
+	if got.Name != "team-a" {
+		t.Fatalf("Name = %q, want team-a", got.Name)
 	}
 }

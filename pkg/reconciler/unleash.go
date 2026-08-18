@@ -8,6 +8,7 @@ package reconciler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
@@ -122,7 +123,28 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // instances created before the annotation existed.
 func (r *UnleashReconciler) resolveIntent(crd *unleashv1.Unleash) (*unleash.Config, error) {
 	if raw := crd.GetAnnotations()[kubernetes.AnnotationDesiredState]; raw != "" {
-		return kubernetes.UnmarshalIntent(raw)
+		cfg, err := kubernetes.UnmarshalIntent(raw)
+		if err != nil {
+			return nil, err
+		}
+
+		// The annotation is authoritative, so whatever it says gets rendered
+		// onto a live instance. Malformed JSON already fails above, but valid
+		// JSON with wrong contents did not: "{}" unmarshals to an all-zero
+		// config and would render empty ingress hosts and a zero database pool.
+		// Hold it to the same rules the builder enforces.
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("desired-state annotation is not a valid config: %w", err)
+		}
+
+		// And confirm it belongs to this instance. A copied or mis-templated
+		// annotation would otherwise converge one instance onto another's
+		// configuration, including its ingress hosts and database secret.
+		if cfg.Name != crd.GetName() {
+			return nil, fmt.Errorf("desired-state annotation names %q but is on instance %q", cfg.Name, crd.GetName())
+		}
+
+		return cfg, nil
 	}
 	return kubernetes.LoadConfigFromCRD(crd).Build()
 }
