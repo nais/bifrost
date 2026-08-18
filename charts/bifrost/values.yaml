@@ -93,6 +93,9 @@ networkPolicy:
   allowDNS: true
   # apiServerCIDR is the CIDR of the Kubernetes API server.
   # apiServerCIDR: 1.2.3.4/32
+  # Namespace the metrics scraper runs in. Ingress from it is allowed so
+  # /metrics can be collected; see the comment in backend-netpol.yaml.
+  metricsNamespace: nais-system
 
 metrics:
   # Scrapes /metrics on the backend service. The endpoint was added in #549;
