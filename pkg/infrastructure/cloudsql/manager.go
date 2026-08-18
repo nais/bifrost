@@ -120,7 +120,13 @@ func (m *Manager) waitForOperation(ctx context.Context, op *admin.Operation) err
 // CreateDatabase creates a new Cloud SQL database. It is idempotent: an existing
 // database is treated as success, and the create operation is awaited to
 // completion so callers can rely on the database actually existing on return.
-func (m *Manager) CreateDatabase(ctx context.Context, name string) error {
+//
+// The returned owned flag reports whether this call created the database. A
+// database that already existed returns owned=false so that a later rollback
+// never drops the live database of an instance this operation did not create.
+// Once the insert is accepted the flag is true even if the wait then fails or
+// is cancelled, because the operation still completes server-side.
+func (m *Manager) CreateDatabase(ctx context.Context, name string) (bool, error) {
 	database := &admin.Database{
 		Name: name,
 	}
@@ -128,15 +134,15 @@ func (m *Manager) CreateDatabase(ctx context.Context, name string) error {
 	op, err := m.databasesClient.Insert(m.config.Google.ProjectID, m.config.Unleash.SQLInstanceID, database).Context(ctx).Do()
 	if err != nil {
 		if isAlreadyExists(err) {
-			m.logger.WithContext(ctx).WithField("database", name).Info("Cloud SQL database already exists, treating as created")
-			return nil
+			m.logger.WithContext(ctx).WithField("database", name).Info("Cloud SQL database already exists, leaving it untouched")
+			return false, nil
 		}
 		m.logger.WithContext(ctx).WithError(err).WithField("database", name).Error("Failed to create database")
-		return fmt.Errorf("failed to create database: %w", err)
+		return false, fmt.Errorf("failed to create database: %w", err)
 	}
 
 	if err := m.waitForOperation(ctx, op); err != nil {
-		return fmt.Errorf("failed to create database: %w", err)
+		return true, fmt.Errorf("failed to create database: %w", err)
 	}
 
 	m.logger.WithContext(ctx).WithFields(logrus.Fields{
@@ -144,15 +150,20 @@ func (m *Manager) CreateDatabase(ctx context.Context, name string) error {
 		"database":  name,
 	}).Info("Created Cloud SQL database")
 
-	return nil
+	return true, nil
 }
 
 // CreateDatabaseUser creates a new Cloud SQL user with a random password and
 // awaits the create operation.
-func (m *Manager) CreateDatabaseUser(ctx context.Context, name string) (string, error) {
+//
+// The returned owned flag follows the same rule as CreateDatabase: a user that
+// already existed is left alone and reported as not owned, so rollback cannot
+// drop the credentials of an instance this operation did not create. Once the
+// insert is accepted the flag is true even if the wait then fails.
+func (m *Manager) CreateDatabaseUser(ctx context.Context, name string) (string, bool, error) {
 	password, err := generatePassword(16)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate password: %w", err)
+		return "", false, fmt.Errorf("failed to generate password: %w", err)
 	}
 
 	user := &admin.User{
@@ -162,12 +173,16 @@ func (m *Manager) CreateDatabaseUser(ctx context.Context, name string) (string, 
 
 	op, err := m.usersClient.Insert(m.config.Google.ProjectID, m.config.Unleash.SQLInstanceID, user).Context(ctx).Do()
 	if err != nil {
+		if isAlreadyExists(err) {
+			m.logger.WithContext(ctx).WithField("user", name).Info("Cloud SQL user already exists, leaving it untouched")
+			return "", false, fmt.Errorf("database user %q already exists", name)
+		}
 		m.logger.WithContext(ctx).WithError(err).WithField("user", name).Error("Failed to create database user")
-		return "", fmt.Errorf("failed to create database user: %w", err)
+		return "", false, fmt.Errorf("failed to create database user: %w", err)
 	}
 
 	if err := m.waitForOperation(ctx, op); err != nil {
-		return "", fmt.Errorf("failed to create database user: %w", err)
+		return "", true, fmt.Errorf("failed to create database user: %w", err)
 	}
 
 	m.logger.WithContext(ctx).WithFields(logrus.Fields{
@@ -175,14 +190,18 @@ func (m *Manager) CreateDatabaseUser(ctx context.Context, name string) (string, 
 		"user":      name,
 	}).Info("Created Cloud SQL user")
 
-	return password, nil
+	return password, true, nil
 }
 
 // CreateSecret creates (or updates) a Kubernetes secret with database
 // credentials. It is idempotent so that a retry after a partial provisioning
 // failure converges the secret to the current password instead of failing with
 // AlreadyExists.
-func (m *Manager) CreateSecret(ctx context.Context, databaseName, password string) error {
+//
+// The returned owned flag reports whether this call created the secret. An
+// existing secret is updated but reported as not owned, so rollback leaves it
+// in place rather than deleting credentials that predate this operation.
+func (m *Manager) CreateSecret(ctx context.Context, databaseName, password string) (bool, error) {
 	data := map[string][]byte{
 		"POSTGRES_USER":     []byte(databaseName),
 		"POSTGRES_PASSWORD": []byte(password),
@@ -206,17 +225,17 @@ func (m *Manager) CreateSecret(ctx context.Context, databaseName, password strin
 		if apierrors.IsAlreadyExists(err) {
 			existing := &corev1.Secret{}
 			if getErr := m.kubeClient.Get(ctx, ctrl.ObjectKeyFromObject(secret), existing); getErr != nil {
-				return fmt.Errorf("failed to get existing database secret: %w", getErr)
+				return false, fmt.Errorf("failed to get existing database secret: %w", getErr)
 			}
 			existing.Data = data
 			if updateErr := m.kubeClient.Update(ctx, existing); updateErr != nil {
-				return fmt.Errorf("failed to update database secret: %w", updateErr)
+				return false, fmt.Errorf("failed to update database secret: %w", updateErr)
 			}
 			m.logger.WithContext(ctx).WithField("database", databaseName).Info("Updated existing database credentials secret")
-			return nil
+			return false, nil
 		}
 		m.logger.WithContext(ctx).WithError(err).WithField("database", databaseName).Error("Failed to create database secret")
-		return fmt.Errorf("failed to create database secret: %w", err)
+		return false, fmt.Errorf("failed to create database secret: %w", err)
 	}
 
 	m.logger.WithContext(ctx).WithFields(logrus.Fields{
@@ -224,7 +243,7 @@ func (m *Manager) CreateSecret(ctx context.Context, databaseName, password strin
 		"database":  databaseName,
 	}).Info("Created database credentials secret")
 
-	return nil
+	return true, nil
 }
 
 // DeleteDatabase deletes a Cloud SQL database. It is idempotent (a missing

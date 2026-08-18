@@ -159,6 +159,22 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 		return
 	}
 
+	// Refuse to provision over an instance that already exists. Without this a
+	// duplicate POST — a client retry, a double submit — runs the whole create
+	// path against live resources, and any failure along the way triggers a
+	// rollback that tears them down. Create must never touch an existing
+	// instance; updates go through PUT.
+	if _, err := h.service.Get(ctx, config.Name); err == nil {
+		h.logger.WithContext(ctx).WithField("name", config.Name).Warn("Instance already exists, refusing to create")
+		c.JSON(http.StatusConflict, ErrorResponse{
+			Error:      "already_exists",
+			Message:    "Instance already exists",
+			Details:    map[string]string{"name": config.Name},
+			StatusCode: http.StatusConflict,
+		})
+		return
+	}
+
 	crd, err := h.service.Create(ctx, config)
 	if err != nil {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", config.Name).Error("Failed to create instance")

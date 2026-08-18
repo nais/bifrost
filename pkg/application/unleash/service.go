@@ -28,10 +28,18 @@ type IService interface {
 }
 
 // DatabaseManager defines the interface for database operations
+// DatabaseManager provisions the Cloud SQL resources behind an instance.
+//
+// The Create* methods return an "owned" flag that reports whether *this call*
+// brought the resource into existence. Rollback keys off that flag, so a
+// resource that already existed is never torn down by an operation that merely
+// encountered it. The flag is set as soon as the create call is accepted —
+// before the long-running operation is awaited — because a cancelled or
+// timed-out wait still leaves the resource to be cleaned up.
 type DatabaseManager interface {
-	CreateDatabase(ctx context.Context, name string) error
-	CreateDatabaseUser(ctx context.Context, name string) (string, error)
-	CreateSecret(ctx context.Context, name string, password string) error
+	CreateDatabase(ctx context.Context, name string) (owned bool, err error)
+	CreateDatabaseUser(ctx context.Context, name string) (password string, owned bool, err error)
+	CreateSecret(ctx context.Context, name string, password string) (owned bool, err error)
 	DeleteDatabase(ctx context.Context, name string) error
 	DeleteDatabaseUser(ctx context.Context, name string) error
 	DeleteSecret(ctx context.Context, name string) error
@@ -119,24 +127,25 @@ func (s *Service) Create(ctx context.Context, config *unleash.Config) (crd *unle
 		}
 	}()
 
+	// Each step reports whether it created the resource. Assign the flag before
+	// checking the error: a step that was accepted but whose wait failed or was
+	// cancelled still owns the resource and must be rolled back.
+
 	// Create database
-	if err = s.dbManager.CreateDatabase(ctx, name); err != nil {
+	if dbCreated, err = s.dbManager.CreateDatabase(ctx, name); err != nil {
 		return nil, err
 	}
-	dbCreated = true
 
 	// Create database user
 	var password string
-	if password, err = s.dbManager.CreateDatabaseUser(ctx, name); err != nil {
+	if password, userCreated, err = s.dbManager.CreateDatabaseUser(ctx, name); err != nil {
 		return nil, err
 	}
-	userCreated = true
 
 	// Create secret with credentials
-	if err = s.dbManager.CreateSecret(ctx, name, password); err != nil {
+	if secretCreated, err = s.dbManager.CreateSecret(ctx, name, password); err != nil {
 		return nil, err
 	}
-	secretCreated = true
 
 	// Create unleash instance in Kubernetes
 	if err = s.repository.Create(ctx, config); err != nil {

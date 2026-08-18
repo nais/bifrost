@@ -25,16 +25,16 @@ import (
 // MockDatabaseManager implements the DatabaseManager interface for testing
 type MockDatabaseManager struct{}
 
-func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) error {
-	return nil
+func (m *MockDatabaseManager) CreateDatabase(ctx context.Context, name string) (bool, error) {
+	return true, nil
 }
 
-func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, error) {
-	return "mock-password", nil
+func (m *MockDatabaseManager) CreateDatabaseUser(ctx context.Context, name string) (string, bool, error) {
+	return "mock-password", true, nil
 }
 
-func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) error {
-	return nil
+func (m *MockDatabaseManager) CreateSecret(ctx context.Context, name string, password string) (bool, error) {
+	return true, nil
 }
 
 func (m *MockDatabaseManager) DeleteDatabase(ctx context.Context, name string) error {

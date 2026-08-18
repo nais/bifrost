@@ -17,34 +17,55 @@ type fakeDBManager struct {
 	failCreateDB, failCreateUser, failCreateSecret bool
 	failDeleteDB                                   bool
 
+	// dbExists and secretExists model resources that predate this operation.
+	// Without them the fake cannot express "already there", which is exactly
+	// the state that must never be rolled back.
+	dbExists, secretExists bool
+
+	// failWaitCreateDB models a create that the API accepted but whose
+	// long-running operation then failed or was cancelled: the resource may
+	// exist server-side, so it must still be rolled back.
+	failWaitCreateDB bool
+
 	calls []string
 }
 
 func (f *fakeDBManager) record(c string)      { f.calls = append(f.calls, c) }
 func (f *fakeDBManager) called(c string) bool { return slices.Contains(f.calls, c) }
 
-func (f *fakeDBManager) CreateDatabase(_ context.Context, _ string) error {
+func (f *fakeDBManager) CreateDatabase(_ context.Context, _ string) (bool, error) {
 	f.record("CreateDatabase")
 	if f.failCreateDB {
-		return errors.New("boom db")
+		return false, errors.New("boom db")
 	}
-	return nil
+	if f.dbExists {
+		// Already there: not ours, so not rollback-eligible.
+		return false, nil
+	}
+	if f.failWaitCreateDB {
+		// Accepted, then the wait failed — we own it even though it errored.
+		return true, errors.New("boom db wait")
+	}
+	return true, nil
 }
 
-func (f *fakeDBManager) CreateDatabaseUser(_ context.Context, _ string) (string, error) {
+func (f *fakeDBManager) CreateDatabaseUser(_ context.Context, _ string) (string, bool, error) {
 	f.record("CreateDatabaseUser")
 	if f.failCreateUser {
-		return "", errors.New("boom user")
+		return "", false, errors.New("boom user")
 	}
-	return "pw", nil
+	return "pw", true, nil
 }
 
-func (f *fakeDBManager) CreateSecret(_ context.Context, _ string, _ string) error {
+func (f *fakeDBManager) CreateSecret(_ context.Context, _ string, _ string) (bool, error) {
 	f.record("CreateSecret")
 	if f.failCreateSecret {
-		return errors.New("boom secret")
+		return false, errors.New("boom secret")
 	}
-	return nil
+	if f.secretExists {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (f *fakeDBManager) DeleteDatabase(_ context.Context, _ string) error {
@@ -118,6 +139,50 @@ func TestCreate_RollsBackOnCRDFailure(t *testing.T) {
 		if !db.called(want) {
 			t.Errorf("rollback did not call %s (calls: %v)", want, db.calls)
 		}
+	}
+}
+
+// The data-loss case: a create that runs against resources it did not create
+// must never delete them when it rolls back. Before the ownership flags, a 409
+// from Cloud SQL was reported as success and the rollback dropped the live
+// database of a running instance.
+func TestCreate_RollbackLeavesPreExistingResourcesAlone(t *testing.T) {
+	repo := &fakeRepo{failCreate: true}
+	db := &fakeDBManager{dbExists: true, secretExists: true}
+	svc := newTestService(repo, db)
+
+	_, err := svc.Create(context.Background(), &unleash.Config{Name: "team-a"})
+	if err == nil {
+		t.Fatal("expected error when CRD create fails")
+	}
+
+	if db.called("DeleteDatabase") {
+		t.Errorf("rollback dropped a database it did not create (calls: %v)", db.calls)
+	}
+	if db.called("DeleteSecret") {
+		t.Errorf("rollback deleted a secret it did not create (calls: %v)", db.calls)
+	}
+	// The user was created by this call, so it is ours to clean up.
+	if !db.called("DeleteDatabaseUser") {
+		t.Errorf("rollback did not clean up the user it created (calls: %v)", db.calls)
+	}
+}
+
+// A create the API accepted but whose long-running operation failed or was
+// cancelled still owns the resource: the operation completes server-side, so
+// skipping rollback would orphan it.
+func TestCreate_RollsBackResourceWhoseWaitFailed(t *testing.T) {
+	repo := &fakeRepo{}
+	db := &fakeDBManager{failWaitCreateDB: true}
+	svc := newTestService(repo, db)
+
+	_, err := svc.Create(context.Background(), &unleash.Config{Name: "team-a"})
+	if err == nil {
+		t.Fatal("expected error when the create operation wait fails")
+	}
+
+	if !db.called("DeleteDatabase") {
+		t.Errorf("rollback skipped a database whose create was accepted (calls: %v)", db.calls)
 	}
 }
 

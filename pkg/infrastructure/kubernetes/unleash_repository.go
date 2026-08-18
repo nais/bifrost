@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -141,7 +142,8 @@ func (r *UnleashRepository) Get(ctx context.Context, name string) (*unleash.Inst
 // Create creates a new Unleash instance
 func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) error {
 	// Create FQDN network policy
-	if err := r.createFQDNNetworkPolicy(ctx, cfg.Name); err != nil {
+	netpolCreated, err := r.createFQDNNetworkPolicy(ctx, cfg.Name)
+	if err != nil {
 		return err
 	}
 
@@ -149,6 +151,15 @@ func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) err
 	unleashCRD := BuildUnleashCRD(r.config, cfg)
 	if err := r.kubeClient.Create(ctx, &unleashCRD); err != nil {
 		r.logger.WithContext(ctx).WithError(err).WithField("instance", cfg.Name).Error("Failed to create Unleash CRD")
+		// Clean up the network policy we just created. The caller's rollback
+		// keys off the CRD having been created, so without this the policy is
+		// orphaned and every retry fails on it.
+		if netpolCreated {
+			if e := r.deleteFQDNNetworkPolicy(ctx, cfg.Name); e != nil && !apierrors.IsNotFound(e) {
+				r.logger.WithContext(ctx).WithError(e).WithField("instance", cfg.Name).
+					Error("Failed to clean up FQDN network policy after CRD create failure")
+			}
+		}
 		return fmt.Errorf("failed to create unleash instance: %w", err)
 	}
 
@@ -351,10 +362,10 @@ func (r *UnleashRepository) getUnleashCRD(ctx context.Context, name string) (*un
 
 // FQDN Network Policy operations
 
-func (r *UnleashRepository) createFQDNNetworkPolicy(ctx context.Context, name string) error {
+func (r *UnleashRepository) createFQDNNetworkPolicy(ctx context.Context, name string) (bool, error) {
 	u, err := url.Parse(r.config.Unleash.TeamsApiURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse teams API URL: %w", err)
+		return false, fmt.Errorf("failed to parse teams API URL: %w", err)
 	}
 
 	protocolTCP := corev1.ProtocolTCP
@@ -418,11 +429,18 @@ func (r *UnleashRepository) createFQDNNetworkPolicy(ctx context.Context, name st
 	}
 
 	if err := r.kubeClient.Create(ctx, &fqdn); err != nil {
+		// A policy left behind by an earlier attempt must not wedge this one:
+		// without tolerating AlreadyExists here, a create that got past the
+		// policy but failed on the CRD can never be retried successfully.
+		if apierrors.IsAlreadyExists(err) {
+			r.logger.WithContext(ctx).WithField("instance", name).Info("FQDN network policy already exists, reusing it")
+			return false, nil
+		}
 		r.logger.WithContext(ctx).WithError(err).WithField("instance", name).Error("Failed to create FQDN network policy")
-		return fmt.Errorf("failed to create fqdn network policy: %w", err)
+		return false, fmt.Errorf("failed to create fqdn network policy: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 func (r *UnleashRepository) updateFQDNNetworkPolicy(ctx context.Context, name string) error {
