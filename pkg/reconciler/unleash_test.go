@@ -2,6 +2,8 @@ package reconciler
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"testing"
 	"time"
 
@@ -173,3 +175,78 @@ func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
 type nopWriter struct{}
 
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+// applyCRDDefaults mimics what the API server does to a stored Unleash object:
+// it stamps the CRD's declared defaults, and a JSON round-trip turns rendered
+// empty slices into nil. The fake client does neither, which is precisely why
+// the original convergence bugs were invisible to the existing tests.
+func applyCRDDefaults(t *testing.T, crd *unleashv1.Unleash) *unleashv1.Unleash {
+	t.Helper()
+
+	raw, err := json.Marshal(crd)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	stored := &unleashv1.Unleash{}
+	if err := json.Unmarshal(raw, stored); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// +kubebuilder:default fields the API server fills in when absent.
+	stored.Spec.Prometheus.Enabled = true
+	stored.Spec.NetworkPolicy.Enabled = true
+	stored.Spec.NetworkPolicy.AllowDNS = true
+	if stored.Spec.Size == 0 {
+		stored.Spec.Size = 1
+	}
+
+	return stored
+}
+
+// The reconciler must reach a fixed point: an instance created through the
+// normal path, once stored by the API server, must reconcile to in_sync with no
+// write. Without this the loop patches every instance on every resync forever
+// while converging on nothing, and dry-run reports permanent drift for the whole
+// fleet.
+func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
+	cfg := testConfig()
+
+	// Render exactly as the create path does, including minting the nonce.
+	intent := &unleash.Config{Name: "team-a", EnableFederation: true}
+	created := kubernetes.BuildUnleashCRD(cfg, intent)
+	stored := applyCRDDefaults(t, &created)
+
+	scheme := runtime.NewScheme()
+	if err := unleashv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stored).Build()
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	r := NewUnleashReconciler(c, cfg, logger, time.Minute, false)
+
+	before := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync))
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "team-a", Namespace: cfg.Unleash.InstanceNamespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	after := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync))
+	if after != before+1 {
+		t.Fatalf("a freshly created instance must reconcile as in_sync; in_sync counter went %v → %v", before, after)
+	}
+
+	// And the stored object must be untouched.
+	live := &unleashv1.Unleash{}
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: "team-a", Namespace: cfg.Unleash.InstanceNamespace,
+	}, live); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if live.ResourceVersion != stored.ResourceVersion {
+		t.Fatalf("in-sync reconcile must not write (resourceVersion %s → %s)", stored.ResourceVersion, live.ResourceVersion)
+	}
+}

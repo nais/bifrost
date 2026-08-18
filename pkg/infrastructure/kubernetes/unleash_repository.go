@@ -624,10 +624,14 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 	cloudSqlProto := corev1.ProtocolTCP
 	cloudSqlPort := intstr.FromInt(3307)
 
-	federationNonce := cfg.FederationNonce
-	if federationNonce == "" {
-		federationNonce = utils.RandomString(8)
+	// Mint a nonce on first create and write it back to cfg, not just into the
+	// spec. stampManagedMetadata records cfg as the desired-state annotation, so
+	// keeping the minted value local would store an intent that disagrees with
+	// the spec it produced — and every later reconcile would read that as drift.
+	if cfg.FederationNonce == "" {
+		cfg.FederationNonce = utils.RandomString(8)
 	}
+	federationNonce := cfg.FederationNonce
 
 	const (
 		UnleashCustomImageRepo = "europe-north1-docker.pkg.dev/nais-io/nais/images/"
@@ -651,6 +655,12 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 		},
 		Spec: unleashv1.UnleashSpec{
 			Size: 1,
+			// State the intent explicitly rather than relying on the CRD's
+			// default. The API server stamps enabled=true into the stored
+			// object, and `omitempty` on a bool means a rendered false is
+			// indistinguishable from unset — so leaving this out makes the
+			// reconciler see permanent drift that no patch can resolve.
+			Prometheus: unleashv1.UnleashPrometheusConfig{Enabled: true},
 			Database: unleashv1.UnleashDatabaseConfig{
 				Host:                  "localhost",
 				Port:                  "5432",

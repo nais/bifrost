@@ -100,7 +100,13 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// annotation from the render without dropping any foreign metadata.
 	applyManagedMetadata(crd, &desired)
 
-	if err := r.client.Patch(ctx, crd, client.MergeFrom(base)); err != nil {
+	// Optimistic lock: a plain MergeFrom omits resourceVersion, so a patch
+	// computed from a stale cached read would land unconditionally and overwrite
+	// a user update made in between — including the desired-state annotation
+	// itself, after which every later reconcile would faithfully converge on the
+	// old intent. A 409 instead triggers backoff and a re-read.
+	patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+	if err := r.client.Patch(ctx, crd, patch); err != nil {
 		reconcilerActionsTotal.WithLabelValues(actionError).Inc()
 		log.WithError(err).Error("Failed to patch instance toward desired configuration")
 		return ctrl.Result{}, err

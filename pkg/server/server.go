@@ -159,8 +159,13 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 	})
 
 	// Prometheus metrics. Registered before the auth middleware below so it is
-	// scrapeable without a key. Drives the dark-launch dashboards
-	// (bifrost_api_auth_requests_total{outcome=...}).
+	// scrapeable without a key, alongside /healthz.
+	//
+	// Both dark launches read from here: the auth rollout watches
+	// bifrost_api_auth_requests_total{outcome=...}, and the reconciler watches
+	// bifrost_reconciler_actions_total. Both register on the prometheus default
+	// registry, and controller-runtime's own metrics server is disabled to avoid
+	// a second listener, so this route is the only way either is scrapeable.
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Serve OpenAPI specification (JSON format from embedded spec)
@@ -309,7 +314,11 @@ func Run(config *config.Config) {
 		go func() {
 			logger.Info("Starting Unleash reconciler manager")
 			if err := mgr.Start(reconcilerCtx); err != nil {
-				logger.WithError(err).Error("Unleash reconciler manager stopped with error")
+				// Fatal, not a logged warning. A manager that cannot start —
+				// missing RBAC, cache sync timeout — otherwise leaves a healthy
+				// looking pod serving HTTP while the reconciler silently does
+				// nothing, and the dark-launch metric reads as "no drift".
+				logger.WithError(err).Fatal("Unleash reconciler manager failed; refusing to run with the reconciler enabled but dead")
 			}
 		}()
 	}

@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	client_go_scheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -36,7 +37,16 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 	}
 
 	mgr, err := ctrl.NewManager(restCfg, manager.Options{
-		Scheme:                  scheme,
+		Scheme: scheme,
+		// Scope the informer to the namespace bifrost is granted. Without this
+		// the cache does a cluster-scoped list/watch, which the chart's
+		// namespaced Role forbids, so the cache never syncs and the manager
+		// fails to start.
+		Cache: cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				cfg.Unleash.InstanceNamespace: {},
+			},
+		},
 		Metrics:                 metricsserver.Options{BindAddress: "0"},
 		LeaderElection:          cfg.Reconciler.LeaderElection,
 		LeaderElectionID:        "bifrost-reconciler.nais.io",
