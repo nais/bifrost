@@ -125,7 +125,16 @@ func (r *UnleashRepository) Get(ctx context.Context, name string) (*unleash.Inst
 	}
 
 	if err := r.kubeClient.Get(ctx, ctrl.ObjectKeyFromObject(serverInstance), serverInstance); err != nil {
-		r.logger.WithContext(ctx).WithError(err).WithField("instance", name).Error("Failed to get Unleash instance")
+		// A missing instance is an ordinary answer, not a failure: the create
+		// path asks this question about every new instance. Logging it at error
+		// level would put a spurious error line in front of every successful
+		// create.
+		log := r.logger.WithContext(ctx).WithError(err).WithField("instance", name)
+		if apierrors.IsNotFound(err) {
+			log.Debug("Unleash instance not found")
+		} else {
+			log.Error("Failed to get Unleash instance")
+		}
 		return nil, fmt.Errorf("failed to get unleash instance %s: %w", name, err)
 	}
 
@@ -154,7 +163,11 @@ func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) err
 		// Clean up the network policy we just created. The caller's rollback
 		// keys off the CRD having been created, so without this the policy is
 		// orphaned and every retry fails on it.
-		if netpolCreated {
+		//
+		// Not on AlreadyExists: that means the instance is live, and the policy
+		// belongs to it even if this call happened to create it in a race.
+		// Deleting it would cut egress for a running instance.
+		if netpolCreated && !apierrors.IsAlreadyExists(err) {
 			if e := r.deleteFQDNNetworkPolicy(ctx, cfg.Name); e != nil && !apierrors.IsNotFound(e) {
 				r.logger.WithContext(ctx).WithError(e).WithField("instance", cfg.Name).
 					Error("Failed to clean up FQDN network policy after CRD create failure")

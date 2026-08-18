@@ -164,6 +164,10 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 	// path against live resources, and any failure along the way triggers a
 	// rollback that tears them down. Create must never touch an existing
 	// instance; updates go through PUT.
+	//
+	// Fail closed: only a definite NotFound means it is safe to provision. Any
+	// other read error is inconclusive, and treating it as "does not exist"
+	// would let a duplicate through during an API-server blip.
 	if _, err := h.service.Get(ctx, config.Name); err == nil {
 		h.logger.WithContext(ctx).WithField("name", config.Name).Warn("Instance already exists, refusing to create")
 		c.JSON(http.StatusConflict, ErrorResponse{
@@ -171,6 +175,15 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 			Message:    "Instance already exists",
 			Details:    map[string]string{"name": config.Name},
 			StatusCode: http.StatusConflict,
+		})
+		return
+	} else if !apierrors.IsNotFound(err) {
+		h.logger.WithContext(ctx).WithError(err).WithField("name", config.Name).
+			Error("Could not determine whether the instance already exists")
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{
+			Error:      "existence_check_failed",
+			Message:    "Could not verify whether the instance already exists",
+			StatusCode: http.StatusServiceUnavailable,
 		})
 		return
 	}

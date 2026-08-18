@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/nais/bifrost/pkg/config"
@@ -232,5 +233,39 @@ func TestDelete_BestEffortContinuesAfterFailure(t *testing.T) {
 	// The user delete must still run even though the database delete failed.
 	if !db.called("DeleteDatabaseUser") {
 		t.Errorf("delete aborted early; DeleteDatabaseUser not called (calls: %v)", db.calls)
+	}
+}
+
+// Two concurrent creates for the same name must not interleave: the loser of a
+// create race would otherwise roll back resources the winner is shipping.
+func TestCreate_SerializesConcurrentCreatesForSameName(t *testing.T) {
+	repo := &fakeRepo{}
+	db := &fakeDBManager{}
+	svc := newTestService(repo, db)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = svc.Create(context.Background(), &unleash.Config{Name: "team-a"})
+		}()
+	}
+	wg.Wait()
+
+	// Under the lock every create runs to completion before the next starts, so
+	// the call log is a whole number of intact sequences. Without it the fake's
+	// slice append races and the sequences interleave.
+	if len(db.calls)%3 != 0 {
+		t.Fatalf("expected whole create sequences, got %v", db.calls)
+	}
+	for i := 0; i < len(db.calls); i += 3 {
+		got := db.calls[i : i+3]
+		want := []string{"CreateDatabase", "CreateDatabaseUser", "CreateSecret"}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("create sequences interleaved at %d: %v", i, db.calls)
+			}
+		}
 	}
 }

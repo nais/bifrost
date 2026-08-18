@@ -3,6 +3,7 @@ package unleash
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
@@ -51,6 +52,25 @@ type Service struct {
 	dbManager  DatabaseManager
 	config     *config.Config
 	logger     *logrus.Logger
+
+	// instanceLocks serializes lifecycle operations per instance name.
+	//
+	// The existence pre-check in the handler closes the sequential duplicate
+	// window, but not the concurrent one: two POSTs for the same name both pass
+	// the check, and whichever loses a create race rolls back resources the
+	// winner is about to ship. bifrost runs a single replica, so an in-process
+	// lock is sufficient; if it is ever scaled out this must become a lease or
+	// a database advisory lock.
+	instanceLocks sync.Map // instance name -> *sync.Mutex
+}
+
+// lockInstance serializes operations on one instance name and returns the
+// release function.
+func (s *Service) lockInstance(name string) func() {
+	value, _ := s.instanceLocks.LoadOrStore(name, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // NewService creates a new unleash application service
@@ -93,6 +113,12 @@ func (s *Service) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, 
 // if the request context was cancelled.
 func (s *Service) Create(ctx context.Context, config *unleash.Config) (crd *unleashv1.Unleash, err error) {
 	name := config.Name
+
+	// Serialize with any other lifecycle operation on this name. Two concurrent
+	// creates would otherwise both pass the handler's existence check, and the
+	// one that loses the database race would roll back resources the winner is
+	// about to ship.
+	defer s.lockInstance(name)()
 
 	var dbCreated, userCreated, secretCreated, crdCreated bool
 	defer func() {
@@ -169,6 +195,9 @@ func (s *Service) Create(ctx context.Context, config *unleash.Config) (crd *unle
 
 // Update updates an existing unleash instance
 func (s *Service) Update(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error) {
+	// Serialize with any create or delete in flight for this instance.
+	defer s.lockInstance(config.Name)()
+
 	// Check what version source was previously configured
 	existing, err := s.repository.Get(ctx, config.Name)
 	if err != nil {
@@ -210,6 +239,9 @@ func (s *Service) Update(ctx context.Context, config *unleash.Config) (*unleashv
 // step no longer skips the remaining teardown and orphans the database/user, and
 // the call can be safely retried to reap anything left behind.
 func (s *Service) Delete(ctx context.Context, name string) error {
+	// Serialize with any create or update in flight for this instance.
+	defer s.lockInstance(name)()
+
 	var errs []error
 
 	// Delete the CRD first to stop the workload, then its credentials secret.
