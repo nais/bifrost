@@ -53,7 +53,7 @@ type Service struct {
 	config     *config.Config
 	logger     *logrus.Logger
 
-	// instanceLocks serializes lifecycle operations per instance name.
+	// instanceLocks serializes API-driven lifecycle operations per instance name.
 	//
 	// The existence pre-check in the handler closes the sequential duplicate
 	// window, but not the concurrent one: two POSTs for the same name both pass
@@ -61,6 +61,12 @@ type Service struct {
 	// winner is about to ship. bifrost runs a single replica, so an in-process
 	// lock is sufficient; if it is ever scaled out this must become a lease or
 	// a database advisory lock.
+	//
+	// Scope: this covers calls that go through Service. The migration and
+	// channel reconcilers write through unleash.Repository directly and are not
+	// serialized by it; the worst interleaving there is a reconciler update
+	// racing a delete and failing on Conflict or NotFound, which errors rather
+	// than damages.
 	instanceLocks sync.Map // instance name -> *sync.Mutex
 }
 
