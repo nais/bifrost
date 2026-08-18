@@ -5,7 +5,7 @@
 # v2.7.0 to v2.8.0 mid-flight, which broke `generate-check` on every branch
 # without a single source change. See #570.
 [tools]
-go = "1.26.4"
+go = "1.26.6"
 "go:mvdan.cc/gofumpt" = "0.11.0"
 "go:github.com/golangci/golangci-lint/cmd/golangci-lint" = "1.64.8"
 "go:honnef.co/go/tools/cmd/staticcheck" = "0.7.0"
