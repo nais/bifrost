@@ -19,6 +19,7 @@ import (
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	"github.com/nais/bifrost/pkg/infrastructure/cloudsql"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
+	"github.com/nais/bifrost/pkg/reconciler"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -158,8 +159,13 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 	})
 
 	// Prometheus metrics. Registered before the auth middleware below so it is
-	// scrapeable without a key. Drives the dark-launch dashboards
-	// (bifrost_api_auth_requests_total{outcome=...}).
+	// scrapeable without a key, alongside /healthz.
+	//
+	// Both dark launches read from here: the auth rollout watches
+	// bifrost_api_auth_requests_total{outcome=...}, and the reconciler watches
+	// bifrost_reconciler_actions_total. Both register on the prometheus default
+	// registry, and controller-runtime's own metrics server is disabled to avoid
+	// a second listener, so this route is the only way either is scrapeable.
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Serve OpenAPI specification (JSON format from embedded spec)
@@ -295,6 +301,37 @@ func Run(config *config.Config) {
 		logger.Info("Channel migration reconciler started in background")
 	}
 
+	// Start the controller-runtime reconcile loop if enabled. It continuously
+	// converges bifrost-managed Unleash instances to their desired config.
+	var reconcilerCancel context.CancelFunc
+	if config.Reconciler.Enabled {
+		mgr, err := reconciler.NewManager(config, logger)
+		if err != nil {
+			logger.Fatal(err)
+		}
+		var reconcilerCtx context.Context
+		reconcilerCtx, reconcilerCancel = context.WithCancel(context.Background())
+		go func() {
+			logger.Info("Starting Unleash reconciler manager")
+			if err := mgr.Start(reconcilerCtx); err != nil {
+				// A manager that cannot start — missing RBAC, cache sync
+				// timeout — must not leave a healthy looking pod serving HTTP
+				// while the reconciler silently does nothing and the
+				// dark-launch metric reads as "no drift". So: fatal.
+				//
+				// Except during shutdown. Once the context is cancelled a
+				// runnable that overruns the stop grace period, or a lost
+				// leader lease, surfaces here too — and exiting then would
+				// skip the HTTP server's drain and drop in-flight requests.
+				if reconcilerCtx.Err() != nil {
+					logger.WithError(err).Warn("Unleash reconciler manager stopped with an error during shutdown")
+					return
+				}
+				logger.WithError(err).Fatal("Unleash reconciler manager failed; refusing to run with the reconciler enabled but dead")
+			}
+		}()
+	}
+
 	// Setup signal handler to gracefully shutdown migration reconcilers
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
@@ -323,6 +360,10 @@ func Run(config *config.Config) {
 	if channelMigrationCancel != nil {
 		logger.Info("Shutting down channel migration reconciler")
 		channelMigrationCancel()
+	}
+	if reconcilerCancel != nil {
+		logger.Info("Shutting down Unleash reconciler manager")
+		reconcilerCancel()
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

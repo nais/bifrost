@@ -25,6 +25,17 @@ backend:
     secretName: bifrost-api-key
     secretKey: api-keys
 
+  # Reconcile loop that converges managed Unleash instances to their desired
+  # config. Dark-launched: enable with dryRun=true first, watch
+  # bifrost_reconciler_actions_total{action="would_change"}, then set dryRun=false.
+  reconciler:
+    enabled: false
+    # Defaults to observe-only, so enabling the reconciler cannot start
+    # writing by accident. Turning dry-run off is the deliberate second
+    # step, after the would_change counter has been read.
+    dryRun: true
+    resyncInterval: "10m"
+
   unleash:
     # Kubernetes namespace to create unleash instances in
     # instanceNamespace:  # mapped in fasit

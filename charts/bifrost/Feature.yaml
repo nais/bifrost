@@ -25,6 +25,13 @@ values:
       template: '"{{ .Management.bifrost_api_key }}"'
   backend.auth.enforced:
     displayName: Enforce API authentication (reject unauthenticated requests)
+  # Reconciler dark-launch toggles (off -> enabled+dryRun -> enabled).
+  backend.reconciler.enabled:
+    displayName: Enable the Unleash reconcile loop
+    config:
+      type: bool
+  backend.reconciler.dryRun:
+    displayName: Reconciler dry-run (observe only, no writes)
     config:
       type: bool
 
