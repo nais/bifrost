@@ -314,10 +314,19 @@ func Run(config *config.Config) {
 		go func() {
 			logger.Info("Starting Unleash reconciler manager")
 			if err := mgr.Start(reconcilerCtx); err != nil {
-				// Fatal, not a logged warning. A manager that cannot start —
-				// missing RBAC, cache sync timeout — otherwise leaves a healthy
-				// looking pod serving HTTP while the reconciler silently does
-				// nothing, and the dark-launch metric reads as "no drift".
+				// A manager that cannot start — missing RBAC, cache sync
+				// timeout — must not leave a healthy looking pod serving HTTP
+				// while the reconciler silently does nothing and the
+				// dark-launch metric reads as "no drift". So: fatal.
+				//
+				// Except during shutdown. Once the context is cancelled a
+				// runnable that overruns the stop grace period, or a lost
+				// leader lease, surfaces here too — and exiting then would
+				// skip the HTTP server's drain and drop in-flight requests.
+				if reconcilerCtx.Err() != nil {
+					logger.WithError(err).Warn("Unleash reconciler manager stopped with an error during shutdown")
+					return
+				}
 				logger.WithError(err).Fatal("Unleash reconciler manager failed; refusing to run with the reconciler enabled but dead")
 			}
 		}()
