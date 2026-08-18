@@ -10,16 +10,19 @@ type UnleashConfigRequest struct {
 	ReleaseChannelName string `json:"release_channel_name,omitempty"`
 	EnableFederation   bool   `json:"enable_federation,omitempty"`
 	FederationNonce    string `json:"-"` // Internal use only, not exposed in API
-	AllowedTeams       string `json:"allowed_teams,omitempty"`
-	AllowedClusters    string `json:"allowed_clusters,omitempty"`
+	// AllowedTeams is a pointer so that a supplied-but-empty list (revoking the
+	// last team) is distinguishable from an omitted field (no statement about
+	// access). A plain string collapses the two and makes the list un-emptiable.
+	AllowedTeams    *string `json:"allowed_teams,omitempty"`
+	AllowedClusters *string `json:"allowed_clusters,omitempty"`
 
 	// Deprecated: Use release_channel_name instead
 	CustomVersion string `json:"custom_version,omitempty" swaggerignore:"true"`
 	// Deprecated: Use allowed_teams instead (teams and namespaces are merged)
-	AllowedNamespaces         string `json:"allowed_namespaces,omitempty" swaggerignore:"true"`
-	LogLevel                  string `json:"log_level,omitempty"`
-	DatabasePoolMax           int    `json:"database_pool_max,omitempty"`
-	DatabasePoolIdleTimeoutMs int    `json:"database_pool_idle_timeout_ms,omitempty"`
+	AllowedNamespaces         *string `json:"allowed_namespaces,omitempty" swaggerignore:"true"`
+	LogLevel                  string  `json:"log_level,omitempty"`
+	DatabasePoolMax           int     `json:"database_pool_max,omitempty"`
+	DatabasePoolIdleTimeoutMs int     `json:"database_pool_idle_timeout_ms,omitempty"`
 }
 
 // UnleashInstanceResponse represents the JSON response for an Unleash instance
@@ -72,10 +75,19 @@ func (r *UnleashConfigRequest) ToConfigBuilder() *unleash.ConfigBuilder {
 	}
 
 	if r.EnableFederation {
-		builder.WithFederation(r.FederationNonce, r.AllowedTeams, r.AllowedNamespaces, r.AllowedClusters)
+		builder.WithFederation(r.FederationNonce, derefString(r.AllowedTeams), derefString(r.AllowedNamespaces), derefString(r.AllowedClusters))
 	}
 
 	return builder
+}
+
+// derefString returns the pointed-to value, or the empty string when the field
+// was omitted from the request.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // ToInstanceResponse converts an Instance to API response

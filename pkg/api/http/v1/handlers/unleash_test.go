@@ -833,3 +833,132 @@ func TestUpdateInstance_PreservesFederationSettings(t *testing.T) {
 	assert.Equal(t, "team-a,team-b,team-c", updated.AllowedNamespaces, "allowed namespaces are merged with teams")
 	assert.Equal(t, "dev-gcp,prod-gcp", updated.AllowedClusters, "allowed clusters should be preserved")
 }
+
+// federatedInstance returns an instance whose allowed teams and namespaces are
+// in sync, matching what MergeTeamsAndNamespaces leaves behind in production.
+func federatedInstance(name, teams string) *domainUnleash.Instance {
+	return &domainUnleash.Instance{
+		Name:               name,
+		Namespace:          "default",
+		ReleaseChannelName: "stable",
+		Version:            "5.10.0",
+		CreatedAt:          time.Now(),
+		EnableFederation:   true,
+		FederationNonce:    "abc12345",
+		AllowedTeams:       teams,
+		AllowedNamespaces:  teams,
+		AllowedClusters:    "dev-gcp,prod-gcp",
+	}
+}
+
+func updateInstanceRequest(t *testing.T, repo *MockUnleashRepository, name string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	channelRepo := &MockReleaseChannelRepository{
+		GetFunc: func(ctx context.Context, name string) (*releasechannel.Channel, error) {
+			return &releasechannel.Channel{Name: name, Image: "quay.io/unleash/unleash-server:5.10.0"}, nil
+		},
+	}
+
+	handler, router := setupUnleashTestHandler(repo, channelRepo)
+	router.PUT("/unleash/:name", handler.UpdateInstance)
+
+	encoded, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("PUT", "/unleash/"+name, strings.NewReader(string(encoded)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// Revoking a team must actually remove it. Before the fix the update handler
+// restored allowed_namespaces from the CRD and MergeTeamsAndNamespaces unioned
+// it back in, so the revoked team reappeared and the CRD was written unchanged.
+func TestUpdateInstance_RevokesTeamAccess(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.instances["fed-instance"] = federatedInstance("fed-instance", "team-a,team-b")
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"allowed_teams": "team-a",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+	updated := repo.instances["fed-instance"]
+	require.NotNil(t, updated)
+	assert.Equal(t, "team-a", updated.AllowedTeams, "team-b must be removed from allowed teams")
+	assert.Equal(t, "team-a", updated.AllowedNamespaces, "team-b must be removed from allowed namespaces")
+	assert.Equal(t, "abc12345", updated.FederationNonce, "unrelated federation settings stay put")
+	assert.Equal(t, "dev-gcp,prod-gcp", updated.AllowedClusters)
+}
+
+// Revoking the last team supplies an empty list. That must be distinguishable
+// from omitting the field, otherwise the list can never be emptied.
+func TestUpdateInstance_RevokesLastTeamAccess(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.instances["fed-instance"] = federatedInstance("fed-instance", "team-a")
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"allowed_teams": "",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+	updated := repo.instances["fed-instance"]
+	require.NotNil(t, updated)
+	assert.Empty(t, updated.AllowedTeams, "an explicitly empty list must empty the allowed teams")
+	assert.Empty(t, updated.AllowedNamespaces, "an explicitly empty list must empty the allowed namespaces")
+}
+
+// Omitting the field entirely is not a statement about access and must preserve
+// whatever is on the instance — an unrelated update must never revoke.
+func TestUpdateInstance_PreservesTeamsWhenNotSupplied(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.instances["fed-instance"] = federatedInstance("fed-instance", "team-a,team-b")
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"log_level": "debug",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+	updated := repo.instances["fed-instance"]
+	require.NotNil(t, updated)
+	assert.Equal(t, "team-a,team-b", updated.AllowedTeams, "an unrelated update must not revoke access")
+	assert.Equal(t, "team-a,team-b", updated.AllowedNamespaces)
+}
+
+// A legacy client that only knows the deprecated namespaces field must still be
+// able to state the desired set, and it must reach the authoritative field.
+func TestUpdateInstance_DeprecatedNamespacesFieldStillRevokes(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.instances["fed-instance"] = federatedInstance("fed-instance", "team-a,team-b")
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"allowed_namespaces": "team-a",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+	updated := repo.instances["fed-instance"]
+	require.NotNil(t, updated)
+	assert.Equal(t, "team-a", updated.AllowedTeams)
+	assert.Equal(t, "team-a", updated.AllowedNamespaces)
+}
+
+// Instances predating the fix may carry differing lists. Preserving must take
+// the union so an unrelated update never silently drops an entry.
+func TestUpdateInstance_PreservesUnionOfDivergedLists(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	instance := federatedInstance("fed-instance", "team-a")
+	instance.AllowedNamespaces = "team-b"
+	repo.instances["fed-instance"] = instance
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"log_level": "debug",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+
+	updated := repo.instances["fed-instance"]
+	require.NotNil(t, updated)
+	assert.Equal(t, "team-a,team-b", updated.AllowedTeams, "preserving must not drop either side")
+	assert.Equal(t, "team-a,team-b", updated.AllowedNamespaces)
+}
