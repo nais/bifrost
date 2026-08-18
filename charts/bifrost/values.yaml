@@ -95,7 +95,9 @@ networkPolicy:
   # apiServerCIDR: 1.2.3.4/32
 
 metrics:
-  enabled: false
+  # Scrapes /metrics on the backend service. The endpoint was added in #549;
+  # before that this had nothing to collect, which is why it defaulted off.
+  enabled: true
 
 alerts:
   enabled: true
