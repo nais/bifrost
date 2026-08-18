@@ -12,6 +12,7 @@ import (
 	"github.com/nais/bifrost/pkg/application/unleash"
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
+	domainunleash "github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 )
@@ -227,16 +228,32 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	// Federation is always enabled for managed instances
 	req.EnableFederation = true
 	req.FederationNonce = existing.FederationNonce
-	if req.AllowedTeams == "" {
-		req.AllowedTeams = existing.AllowedTeams
-	}
-	//lint:ignore SA1019 AllowedNamespaces is deprecated but still supported for backwards compatibility
-	if req.AllowedNamespaces == "" {
+
+	// allowed_teams is authoritative; allowed_namespaces is its deprecated
+	// alias. Either one, when supplied, states the complete desired set and
+	// replaces the list — that is what makes revocation possible. Supplying
+	// neither is not a statement about access, so the existing list is kept.
+	//
+	// Preserving takes the union of both stored fields: instances written
+	// before the two were kept in sync may hold different lists, and an
+	// unrelated update must never silently drop an entry.
+	desiredTeams := req.AllowedTeams
+	if desiredTeams == nil {
 		//lint:ignore SA1019 AllowedNamespaces is deprecated but still supported for backwards compatibility
-		req.AllowedNamespaces = existing.AllowedNamespaces
+		desiredTeams = req.AllowedNamespaces
 	}
-	if req.AllowedClusters == "" {
-		req.AllowedClusters = existing.AllowedClusters
+	if desiredTeams == nil {
+		// existing is the domain Instance, whose namespaces field is not
+		// deprecated, so no SA1019 suppression is needed here.
+		preserved := domainunleash.MergeLists(existing.AllowedTeams, existing.AllowedNamespaces)
+		desiredTeams = &preserved
+	}
+	req.AllowedTeams = desiredTeams
+	//lint:ignore SA1019 AllowedNamespaces is deprecated but still supported for backwards compatibility
+	req.AllowedNamespaces = desiredTeams
+
+	if req.AllowedClusters == nil {
+		req.AllowedClusters = &existing.AllowedClusters
 	}
 
 	// Check if switching release channels and validate major version
@@ -264,7 +281,9 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	}
 
 	builder := req.ToConfigBuilder()
-	builder.MergeTeamsAndNamespaces()
+	// Replace rather than union: unioning here would resurrect every entry the
+	// caller just asked to remove.
+	builder.SetAllowedTeams(*desiredTeams)
 
 	config, err := builder.Build()
 	if err != nil {
@@ -275,6 +294,21 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 			StatusCode: http.StatusBadRequest,
 		})
 		return
+	}
+
+	// Log the access change explicitly. A request that leaves the allowed set
+	// untouched is indistinguishable from one that never arrived unless the
+	// before/after sets are recorded here.
+	before := domainunleash.MergeLists(existing.AllowedTeams)
+	accessLog := h.logger.WithContext(ctx).WithFields(logrus.Fields{
+		"instance":             name,
+		"allowed_teams_before": before,
+		"allowed_teams_after":  config.AllowedTeams,
+	})
+	if before == config.AllowedTeams {
+		accessLog.Info("Allowed teams unchanged by update")
+	} else {
+		accessLog.Info("Changing allowed teams")
 	}
 
 	crd, err := h.service.Update(ctx, config)

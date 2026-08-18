@@ -117,16 +117,33 @@ func (b *ConfigBuilder) SetDefaultVersionIfNeeded(availableVersions []github.Unl
 	return b
 }
 
-// MergeTeamsAndNamespaces merges teams and namespaces into a single list
+// MergeTeamsAndNamespaces merges teams and namespaces into a single list.
+//
+// This is union semantics and is only correct where the two fields are
+// independent inputs, i.e. on create. On update it makes the allowed set
+// monotonically growing, so use SetAllowedTeams there instead.
 func (b *ConfigBuilder) MergeTeamsAndNamespaces() *ConfigBuilder {
+	return b.SetAllowedTeams(MergeLists(b.config.AllowedTeams, b.config.AllowedNamespaces))
+}
+
+// SetAllowedTeams replaces the allowed-team list, keeping the deprecated
+// namespaces field in sync with it. Unlike MergeTeamsAndNamespaces this
+// replaces rather than unions, so entries can be removed.
+func (b *ConfigBuilder) SetAllowedTeams(teams string) *ConfigBuilder {
+	normalized := MergeLists(teams)
+	b.config.AllowedTeams = normalized
+	b.config.AllowedNamespaces = normalized
+	return b
+}
+
+// MergeLists trims, de-duplicates and sorts the entries of any number of
+// comma-separated lists into one comma-separated list.
+func MergeLists(values ...string) string {
 	merged := make(map[string]bool)
-
-	for _, team := range splitNoEmpty(b.config.AllowedTeams, ",") {
-		merged[strings.TrimSpace(team)] = true
-	}
-
-	for _, namespace := range splitNoEmpty(b.config.AllowedNamespaces, ",") {
-		merged[strings.TrimSpace(namespace)] = true
+	for _, value := range values {
+		for _, entry := range splitNoEmpty(value, ",") {
+			merged[strings.TrimSpace(entry)] = true
+		}
 	}
 
 	result := make([]string, 0, len(merged))
@@ -136,11 +153,7 @@ func (b *ConfigBuilder) MergeTeamsAndNamespaces() *ConfigBuilder {
 
 	sort.Strings(result)
 
-	mergedStr := strings.Join(result, ",")
-	b.config.AllowedTeams = mergedStr
-	b.config.AllowedNamespaces = mergedStr
-
-	return b
+	return strings.Join(result, ",")
 }
 
 // Build validates and returns the Config, or returns an error if validation fails
