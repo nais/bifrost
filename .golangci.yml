@@ -1,21 +1,41 @@
-linters-settings:
-  staticcheck:
-    checks:
-      - "all"
-      - "-SA1019" # Disable deprecation warnings - we intentionally use deprecated fields for backwards compatibility
-      - "-ST1005" # Disable capitalized error string check - generated code from oapi-codegen violates this
-
-issues:
-  exclude-rules:
-    # Allow using deprecated fields in handlers (CustomVersion, AllowedNamespaces are deprecated but still supported)
-    - path: pkg/api/http/v1/handlers/unleash\.go
-      linters:
-        - staticcheck
-      text: "SA1019"
-
-    # Exclude generated OpenAPI code from all linting checks
-    - path: pkg/api/generated/
-      linters:
-        - staticcheck
-        - golint
-        - stylecheck
+version: "2"
+linters:
+  settings:
+    staticcheck:
+      # v2 folded stylecheck into staticcheck, so the ST checks now surface
+      # here too. Mirror the exclusions the `check` task already applies to
+      # standalone staticcheck, so the two tools agree on what is enforced.
+      checks:
+        - all
+        - -SA1019 # deprecated fields are used intentionally for backwards compatibility
+        - -ST1000 # package comments
+        - -ST1003 # naming (SqlProxy vs SQLProxy) — see follow-up
+        - -ST1005 # capitalized error strings, from oapi-codegen output
+        - -QF1008 # redundant embedded field selectors — see follow-up
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - staticcheck
+        path: pkg/api/http/v1/handlers/unleash\.go
+        text: SA1019
+      - linters:
+          - golint
+          - staticcheck
+        path: pkg/api/generated/
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
