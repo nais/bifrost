@@ -9,7 +9,15 @@ spec:
     - podSelector:
         matchLabels:
           app: nais-api
+  # Metrics scraping. The pod selector alone is scoped to this namespace, and
+  # it does not match the prometheus-agent that actually scrapes here — the
+  # target is discovered but every scrape fails, so up stays 0. Match on the
+  # namespace as well, which is what the Unleash instances' policies do and
+  # what demonstrably works in this cluster.
   - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.networkPolicy.metricsNamespace | default "nais-system" }}
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: prometheus
