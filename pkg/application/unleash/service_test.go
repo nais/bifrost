@@ -113,6 +113,7 @@ func (f *fakeRepo) Get(context.Context, string) (*unleash.Instance, error) {
 func (f *fakeRepo) GetCRD(context.Context, string) (*unleashv1.Unleash, error) {
 	return &unleashv1.Unleash{}, nil
 }
+
 func (f *fakeRepo) Update(_ context.Context, _ *unleash.Config, opts unleash.UpdateOptions) error {
 	f.record("Update")
 	f.updateOpts = opts
