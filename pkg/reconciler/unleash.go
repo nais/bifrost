@@ -98,6 +98,23 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		recordAction(actionInSync, reasonNone)
 		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
+
+	// Observe-only, and deliberately not gated on dry-run: an instance with no
+	// desired-state annotation has no recorded intent, so `desired` above was
+	// rendered from LoadConfigFromCRD — a lossy read-back of the live spec.
+	// Applying it would delete whatever the read-back dropped and promote the
+	// rest into declared truth, permanently. And it would happen to every
+	// instance, not only the drifting ones, because the absent annotation is by
+	// itself an inSync mismatch. Adoption puts these instances in the queue on
+	// purpose; recording an intent for them has to be a separate deliberate act,
+	// not the first thing the queue does to them.
+	if !hasRecordedIntent(crd) {
+		state.reason = reasonMissingIntent
+		recordAction(actionWouldChange, state.reason)
+		state.annotate(log).Info("Instance has no recorded desired-state intent; observing only (no changes applied)")
+		return ctrl.Result{RequeueAfter: r.resync}, nil
+	}
+
 	log = state.annotate(log)
 
 	// Observe mode (dark launch): record that a change is needed but do not write,
@@ -160,6 +177,13 @@ func (r *UnleashReconciler) resolveIntent(crd *unleashv1.Unleash) (*unleash.Conf
 		return cfg, nil
 	}
 	return kubernetes.LoadConfigFromCRD(crd).Build()
+}
+
+// hasRecordedIntent reports whether the instance carries an intent bifrost
+// wrote, as opposed to one reverse-engineered from its spec. Only the former may
+// be converged onto a live instance.
+func hasRecordedIntent(crd *unleashv1.Unleash) bool {
+	return crd.GetAnnotations()[kubernetes.AnnotationDesiredState] != ""
 }
 
 // syncState is the outcome of comparing a live instance to its render: whether
@@ -303,8 +327,19 @@ func (r *UnleashReconciler) runFleetSweep(ctx context.Context) error {
 // census that keeps failing is visible as a stale one rather than as a plausible
 // steady state.
 func (r *UnleashReconciler) countInstances(ctx context.Context) {
+	// The same guarded namespace the adopter and the informer use. Reading the
+	// raw config value here instead is how the census and adoption came apart:
+	// a value the guard rejects would leave adoption refusing while the census
+	// listed on, or the reverse, and the numbers adoption is audited against
+	// would describe a different namespace than the one adoption touched.
+	ns, err := instanceNamespace(r.config)
+	if err != nil {
+		r.logger.WithError(err).Warn("Refusing to count Unleash instances")
+		return
+	}
+
 	list := &unleashv1.UnleashList{}
-	if err := r.client.List(ctx, list, client.InNamespace(r.config.Unleash.InstanceNamespace)); err != nil {
+	if err := r.client.List(ctx, list, client.InNamespace(ns)); err != nil {
 		r.logger.WithError(err).Warn("Failed to count Unleash instances")
 		return
 	}

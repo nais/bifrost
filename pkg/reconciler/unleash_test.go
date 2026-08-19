@@ -13,6 +13,7 @@ import (
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -458,5 +459,63 @@ func TestReconcile_CountsUnresolvableIntent(t *testing.T) {
 	}
 	if live.ResourceVersion != broken.ResourceVersion {
 		t.Errorf("an unresolvable intent must not write (RV %s -> %s)", broken.ResourceVersion, live.ResourceVersion)
+	}
+}
+
+// The rule the whole adoption feature rests on. Adoption puts instances that
+// have never carried a desired-state annotation into the reconcile queue, and
+// their absent annotation is by itself an inSync mismatch — so without this the
+// very next non-dry-run reconcile renders each of them from LoadConfigFromCRD, a
+// lossy read-back of their own spec, and writes the result. Not gated on
+// dry-run: dry-run is a rollout step that gets turned off.
+func TestReconcile_NeverWritesAnInstanceWithNoRecordedIntent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*unleashv1.Unleash)
+	}{
+		// The dangerous case: a legacy instance carrying settings the read-back
+		// cannot see, which converging would delete.
+		{"with spec drift", func(u *unleashv1.Unleash) {
+			u.Spec.Size = 3
+			u.Spec.ExtraEnvVars = append(u.Spec.ExtraEnvVars, corev1.EnvVar{Name: "HAND_SET", Value: "by-an-operator"})
+		}},
+		// And the case that shows the annotation alone is enough to trigger a
+		// write: this instance matches its render exactly.
+		{"without spec drift", func(*unleashv1.Unleash) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered := renderManaged(t, "team-no-intent")
+			crd := rendered.DeepCopy()
+			delete(crd.Annotations, kubernetes.AnnotationDesiredState)
+			tc.mutate(crd)
+
+			c := newFakeClient(t, crd)
+			r := newReconciler(c) // not dry-run
+			stored := get(t, c, crd.Namespace, crd.Name)
+
+			observedBefore := actionCount(t, "would_change", "missing_desired_state")
+			changedBefore := actionCount(t, "changed", "spec_mismatch") + actionCount(t, "changed", "desired_state_mismatch")
+
+			if _, err := r.Reconcile(context.Background(), requestFor(crd)); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+
+			live := get(t, c, crd.Namespace, crd.Name)
+			if live.ResourceVersion != stored.ResourceVersion {
+				t.Errorf("an instance with no recorded intent was written (RV %s -> %s)", stored.ResourceVersion, live.ResourceVersion)
+			}
+			if !equality.Semantic.DeepEqual(stored.Spec, live.Spec) {
+				t.Errorf("spec changed: size %d -> %d", stored.Spec.Size, live.Spec.Size)
+			}
+			if got, ok := live.GetAnnotations()[kubernetes.AnnotationDesiredState]; ok {
+				t.Errorf("the reconciler stamped a desired-state annotation (%q) derived from a lossy read-back", got)
+			}
+			if got := actionCount(t, "would_change", "missing_desired_state"); got != observedBefore+1 {
+				t.Errorf(`bifrost_reconciler_actions_total{action="would_change",reason="missing_desired_state"} = %v, want %v`, got, observedBefore+1)
+			}
+			if got := actionCount(t, "changed", "spec_mismatch") + actionCount(t, "changed", "desired_state_mismatch"); got != changedBefore {
+				t.Errorf("a change was counted for an instance that has no intent to converge to (%v -> %v)", changedBefore, got)
+			}
+		})
 	}
 }

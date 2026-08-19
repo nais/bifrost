@@ -29,18 +29,24 @@ values:
     description: Off means accept-then-enforce — unauthenticated calls are allowed but logged and counted. Turn on per environment once nais-api is confirmed sending the key.
     config:
       type: bool
-  # Reconciler dark-launch toggles (off -> enabled+dryRun -> enabled).
+  # Reconciler rollout, in order: enabled+dryRun -> +autoAdopt -> -autoAdopt -> -dryRun.
   backend.reconciler.enabled:
     displayName: Enable the Unleash reconcile loop
     config:
       type: bool
   backend.reconciler.dryRun:
     displayName: Reconciler dry-run (observe only, no writes)
+    description: Must stay on while adoption is on — bifrost refuses to start with both adoption enabled and dry-run off. Turn off last, once adoption is off again.
     config:
       type: bool
   backend.reconciler.autoAdopt:
     displayName: Adopt unlabelled Unleash instances in bifrost's namespace
-    description: Stamps only the managed-by label, never the desired-state annotation, so instances created before the label become visible to the reconciler. Turn on together with dry-run to measure the fleet before converging it.
+    description: >-
+      Stamps only the managed-by label, never the desired-state annotation, so instances created before the label
+      become visible to the reconciler. Requires dry-run to be on: bifrost refuses to start otherwise, because an
+      adopted instance carries no recorded intent and converging one means rendering it from a lossy read-back of its
+      own spec. Label an instance bifrost.nais.io/adopt=false (that exact lowercase value) to keep it out; anything
+      else is logged and adopted.
     config:
       type: bool
 

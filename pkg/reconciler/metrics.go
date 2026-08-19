@@ -24,7 +24,16 @@ const (
 	reasonSpecMismatch   = "spec_mismatch"          // the live spec differs from the render
 	reasonMissingLabel   = "missing_managed_label"  // the managed-by label is absent
 	reasonIntentMismatch = "desired_state_mismatch" // the desired-state annotation differs
+	reasonMissingIntent  = "missing_desired_state"  // no desired-state annotation at all: nothing to converge to, so nothing is written
 )
+
+// reasonMissingIntent is the one reason that is not a drift cause but a refusal.
+// An instance without the annotation has no recorded intent, so the only thing
+// available to render from is LoadConfigFromCRD — a lossy read-back of the live
+// spec. It is reported as would_change and never applied, whatever dry-run says,
+// so the adopted-but-never-stamped fleet is counted separately from instances
+// that carry an intent and genuinely drifted from it. The drifting spec sections
+// are still on the log line; only the metric collapses them into this reason.
 
 var reconcilerActionsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
@@ -92,9 +101,12 @@ var instancesUpdatedTimestamp = prometheus.NewGauge(
 // reconcile — it is the metadata write that lets one happen at all. Mixing them
 // would make sum(rate(actions_total)) stop meaning reconciles, and would put a
 // one-off migration spike inside the series the dark launch is read from.
+// The two series do not count the same thing, and the Help string says so: an
+// instance is stamped once, but a failed stamp is retried on every sweep, so the
+// error series counts attempts and can exceed the number of instances involved.
 const (
-	adoptionAdopted = "adopted" // the managed-by label was stamped
-	adoptionError   = "error"   // the stamping patch failed
+	adoptionAdopted = "adopted" // an instance was stamped with the managed-by label (once per instance)
+	adoptionError   = "error"   // a stamping attempt failed; retried on the next sweep
 )
 
 // adoptionsTotal makes "65 instances were adopted" an event that was observed
@@ -105,7 +117,7 @@ const (
 var adoptionsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "bifrost_reconciler_adoptions_total",
-		Help: "Unleash instances stamped with the bifrost managed-by label by the fleet adopter.",
+		Help: "Fleet adoption outcomes: result=adopted counts instances stamped with the managed-by label, result=error counts failed stamping attempts (retried every sweep).",
 	},
 	[]string{"result"},
 )

@@ -82,6 +82,7 @@ func TestReconcilerActions_ExposeTheDocumentedLabelValues(t *testing.T) {
 		{"in_sync", "none", func() { recordAction(actionInSync, reasonNone) }},
 		{"would_change", "spec_mismatch", func() { recordAction(actionWouldChange, reasonSpecMismatch) }},
 		{"would_change", "desired_state_mismatch", func() { recordAction(actionWouldChange, reasonIntentMismatch) }},
+		{"would_change", "missing_desired_state", func() { recordAction(actionWouldChange, reasonMissingIntent) }},
 		{"changed", "spec_mismatch", func() { recordAction(actionChanged, reasonSpecMismatch) }},
 		{"error", "spec_mismatch", func() { recordAction(actionError, reasonSpecMismatch) }},
 		{"intent_error", "none", func() { recordAction(actionIntentError, reasonNone) }},
