@@ -1,0 +1,18 @@
+# Passed explicitly with --config in .github/workflows/chart.yaml. ct discovers
+# its configuration from CT_CONFIG_DIR, which chart-testing-action sets to its
+# own etc directory — so this file is picked up when ct runs from a shell in the
+# repo root, and silently ignored in CI unless it is named on the command line.
+# chart-testing configuration. Unleasherator gets by without one because its
+# chart workflow stamps a date-based version into Chart.yaml before linting, so
+# ct's version-increment check always sees a bump. Bifrost's chart version is
+# stamped at release time instead — by nais/actions in main.yaml — and stays
+# 0.0.1 in the tree, so that check would fail every pull request for a reason
+# that has nothing to do with the chart being correct.
+remote: origin
+target-branch: main
+chart-dirs:
+  - charts
+check-version-increment: false
+# The backend has to pull its image, start, sync the reconciler cache and pass
+# a readiness probe; the default 300s is tight for a cold kind node.
+helm-extra-args: --timeout 600s

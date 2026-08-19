@@ -1,0 +1,119 @@
+name: Helm Chart
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.9"
+  HELM_VERSION: v3.11.2
+  # Matches backend.image.repository in values.yaml and the tag in
+  # ci/gcp-values.yaml, so the chart installs the image built here without the
+  # workflow having to rewrite the values file.
+  IMAGE: europe-north1-docker.pkg.dev/nais-io/nais/images/bifrost:chart-testing
+  TEST_IMAGE: curlimages/curl:8.11.1
+  KIND_CLUSTER: chart-testing
+  TEST_NAMESPACE: bifrost-e2e-test
+
+jobs:
+  lint-install:
+    name: Lint and install chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # ratchet:azure/setup-helm@v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # ratchet:actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          check-latest: true
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # ratchet:helm/chart-testing-action@v2.8.0
+
+      - name: Run chart-testing (list-changed)
+        id: list-changed
+        run: |
+          changed=$(ct list-changed --config ct.yaml --target-branch ${{ github.event.repository.default_branch }})
+          if [[ -n "$changed" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run chart-testing (lint)
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct lint --config ct.yaml --target-branch ${{ github.event.repository.default_branch }}
+
+      - name: Set up Go
+        if: steps.list-changed.outputs.changed == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # ratchet:actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Create kind cluster
+        if: steps.list-changed.outputs.changed == 'true'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # ratchet:helm/kind-action@v1.14.0
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+
+      - name: Build and load image into kind
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          docker build -t "${IMAGE}" .
+          kind load docker-image "${IMAGE}" --name "${KIND_CLUSTER}"
+          # Pre-loaded so the helm test does not depend on a registry pull from
+          # inside the cluster.
+          docker pull "${TEST_IMAGE}"
+          kind load docker-image "${TEST_IMAGE}" --name "${KIND_CLUSTER}"
+
+      - name: Install cluster prerequisites
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          # ServiceMonitor and PrometheusRule. Without these the chart's
+          # monitoring resources are rejected by the API server, which is a
+          # thing worth being told about rather than a thing to skip.
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm install prometheus-operator-crds prometheus-community/prometheus-operator-crds --wait
+
+          # The Unleash CRD, at exactly the version bifrost compiles against —
+          # taken from the pinned unleasherator module rather than from that
+          # repo's main branch, so the reconciler's informer and the schema it
+          # syncs against cannot drift apart.
+          go mod download github.com/nais/unleasherator
+          kubectl apply -f "$(go list -m -f '{{.Dir}}' github.com/nais/unleasherator)/config/crd/bases"
+
+          kubectl create namespace "${TEST_NAMESPACE}"
+
+      - name: Run chart-testing (install)
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          ct install \
+            --config ct.yaml \
+            --charts ./charts/bifrost \
+            --target-branch ${{ github.event.repository.default_branch }} \
+            --namespace "${TEST_NAMESPACE}"
+
+      - name: Dump diagnostics on failure
+        if: failure() && steps.list-changed.outputs.changed == 'true'
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl -n "${TEST_NAMESPACE}" describe pods || true
+          kubectl -n "${TEST_NAMESPACE}" logs -l app=bifrost --tail=200 --prefix || true

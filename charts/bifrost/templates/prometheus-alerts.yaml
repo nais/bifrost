@@ -1,3 +1,11 @@
+{{/*
+The instance namespace is the only value this file interpolates, and it lands in
+PromQL rather than in a Kubernetes field, so an unset one used to fail inside the
+`replace` below as `invalid value; expected string` — a message naming neither
+the value nor the file. Bind it once through `required`, with the same message
+the deployment uses, so a missing value names itself here too.
+*/}}
+{{- $instanceNamespace := .Values.backend.unleash.instanceNamespace | required ".unleash.instanceNamespace is required" -}}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -7,7 +15,7 @@ spec:
     - name: unleash_database_alerts
       rules:
       - alert: UnleashHighDatabaseLatency
-        expr: sum(db_query_duration_seconds{quantile="0.9", namespace="{{ .Values.backend.unleash.instanceNamespace }}"}) by (service) > 0.5
+        expr: sum(db_query_duration_seconds{quantile="0.9", namespace="{{ $instanceNamespace }}"}) by (service) > 0.5
         for: 10m
         labels:
           severity: warning
@@ -22,7 +30,7 @@ spec:
     - name: unleash_http_alerts
       rules:
       - alert: UnleashUnsuccessfulNginxRequests
-        expr: sum(rate(nginx_ingress_controller_requests{namespace="{{ .Values.backend.unleash.instanceNamespace }}", status=~"5.."}[5m])) / sum(rate(nginx_ingress_controller_requests{namespace="{{ .Values.backend.unleash.instanceNamespace }}"}[5m])) > 0.05
+        expr: sum(rate(nginx_ingress_controller_requests{namespace="{{ $instanceNamespace }}", status=~"5.."}[5m])) / sum(rate(nginx_ingress_controller_requests{namespace="{{ $instanceNamespace }}"}[5m])) > 0.05
         for: 5m
         labels:
           severity: warning
@@ -33,7 +41,7 @@ spec:
           action: "Check the Nginx Ingress Controller logs request endpoints for errors and investigate the root cause of the issue."
 
       - alert: UnleashUnsuccessfulRequests
-        expr: sum(rate(haproxy_backend_http_responses_total{proxy=~"{{ .Values.backend.unleash.instanceNamespace | replace "-" "_" }}_svc_.+", code=~"4xx|5xx"}[5m])) / sum(rate(haproxy_backend_http_responses_total{proxy="{{ .Values.backend.unleash.instanceNamespace | replace "-" "_" }}_svc_.+"}[5m])) > 0.1
+        expr: sum(rate(haproxy_backend_http_responses_total{proxy=~"{{ $instanceNamespace | replace "-" "_" }}_svc_.+", code=~"4xx|5xx"}[5m])) / sum(rate(haproxy_backend_http_responses_total{proxy="{{ $instanceNamespace | replace "-" "_" }}_svc_.+"}[5m])) > 0.1
         for: 5m
         labels:
           severity: warning

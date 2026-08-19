@@ -1,0 +1,79 @@
+---
+# The values chart-testing installs the chart with. They are the shape a GCP
+# management cluster gets from fasit, filled in with usable test values rather
+# than placeholders: bifrost validates 14 required variables at startup and
+# refuses an empty or whitespace-padded namespace, so a placeholder that only
+# looks non-empty would be caught by the very check this test exists to run.
+
+backend:
+  image:
+    # The image is built from the pull request and loaded straight into kind,
+    # so there is nothing to pull. The tag is fixed here rather than patched
+    # into values.yaml by the workflow, so the file says what it installs.
+    pullPolicy: Never
+    tag: chart-testing
+
+  google:
+    projectId: nais-chart-testing
+    serviceAccountEmail: bifrost@nais-chart-testing.iam.gserviceaccount.com
+    # kind has no metadata server, and bifrost builds the Cloud SQL admin
+    # client while it starts — before it serves /healthz — so without
+    # credentials of some kind the process exits and the chart can never be
+    # installed. This document is syntactically valid and authenticates
+    # nothing: it is enough for the client to be constructed, and any call made
+    # through it would fail. The chart test makes none; it exercises startup,
+    # the reconciler and the HTTP surface, none of which talk to Cloud SQL.
+    serviceAccountCredentialsJson: |
+      {"type":"authorized_user","client_id":"chart-testing","client_secret":"chart-testing","refresh_token":"chart-testing"}
+
+  # The pre-shared key path nais-api uses, in the fail-closed setting. Bifrost
+  # refuses to start with enforcement on and no keys, so this covers both the
+  # secret this chart renders and the check that reads it.
+  auth:
+    apiKeys: chart-testing-api-key
+    enforced: true
+
+  # Feature.yaml computes both of these on for every environment (#598), so
+  # this is the configuration that actually ships — and the one that can take
+  # the process down: the manager exits the pod if its cache cannot sync, which
+  # is what makes an unreadable Unleash CRD or a missing Role show up here as a
+  # failed install rather than as a crashloop after rollout. dryRun stays on;
+  # the reconciler reads the fleet and writes nothing.
+  reconciler:
+    enabled: true
+    dryRun: true
+
+  unleash:
+    # A namespace name, not a stand-in string. Bifrost rejects an empty one
+    # (it means *all* namespaces to client-go, not none) and rejects padding
+    # rather than trimming it, so this has to be a name the cluster would
+    # accept. The chart creates it.
+    instanceNamespace: bifrost-unleash
+
+    sqlInstanceId: bifrost-unleash-sql
+    sqlInstanceAddress: 10.0.0.10
+    sqlInstanceRegion: europe-north1
+
+    googleServiceAccountEmail: bifrost-unleash-sql@nais-chart-testing.iam.gserviceaccount.com
+    kubernetesServiceAccountName: bifrost-unleash-sql
+
+    webIngressClass: external-fa-haproxy
+    webIngressHost: unleash-web.iap.chart-testing.example.com
+    apiIngressClass: internal-haproxy
+    apiIngressHost: unleash-api.chart-testing.example.com
+    webOAuthJWTAudience: chart-testing-oauth-client-id
+
+    teamsApiUrl: https://console.chart-testing.example.com/graphql
+    teamsApiToken: chart-testing-teams-api-token
+
+networkPolicy:
+  enabled: true
+  allowDNS: true
+  # kind's default service CIDR has the API server at .1. kind's CNI does
+  # enforce NetworkPolicy, so leaving this on is not decoration: the helm test
+  # reaches the backend as nais-api and would time out if the ingress rule
+  # stopped admitting it.
+  apiServerCIDR: 10.96.0.1/32
+
+metrics:
+  enabled: true
