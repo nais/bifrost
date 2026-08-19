@@ -132,9 +132,25 @@ backend:
     teamsApiTokenSecretName: teams-api-token
     teamsApiTokenSecretKey: token
 
-  google: {}
+  google:
     # projectId:  # mapped in fasit
     # serviceAccountEmail:  # mapped in fasit
+
+    # Cloud SQL admin credentials, as the contents of a JSON credentials file.
+    # Empty in every environment this is deployed to for real: bifrost gets its
+    # token from the GKE metadata server through Workload Identity, keyed off
+    # the iam.gke.io/gcp-service-account annotation this chart puts on the
+    # backend service account.
+    #
+    # Setting it mounts the document and points GOOGLE_APPLICATION_CREDENTIALS
+    # at it, which takes precedence over Workload Identity. It exists for one
+    # case: a cluster with no metadata server at all. Bifrost builds the Cloud
+    # SQL admin client while it starts, before it serves anything, so without
+    # some form of credentials the process exits before /healthz ever answers —
+    # which is what stopped the chart from being installable under
+    # chart-testing, where the cluster is kind. Deliberately not exposed in
+    # Feature.yaml; nothing should set it in a real environment.
+    serviceAccountCredentialsJson: ""
 
 nameOverride: ""
 fullnameOverride: ""
@@ -159,3 +175,13 @@ metrics:
 
 alerts:
   enabled: true
+
+# `helm test` hook. It is what makes the chart-testing run assert something
+# beyond "the pod became ready": it calls the API through the Service, and
+# checks that an enabled reconciler has actually published a census. See
+# templates/tests/test-api.yaml.
+tests:
+  enabled: true
+  image:
+    repository: curlimages/curl
+    tag: "8.11.1"

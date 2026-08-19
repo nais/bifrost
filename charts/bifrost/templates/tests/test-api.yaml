@@ -1,0 +1,85 @@
+{{/*
+A `helm test` that asserts the two things a successful install does not, on its
+own, prove.
+
+The readiness probe reaches the container directly, so it stays green even if
+the Service selects nothing — the pod is healthy and the API is unreachable.
+This goes through the Service, wearing nais-api's label, which is the path
+nais-api actually uses — and the CNI kind runs does enforce NetworkPolicy, so
+the backend's ingress rule is on the hook here too: drop it and this times out
+rather than passing.
+
+And a reconciler that is enabled but never completes a census leaves every
+bifrost_reconciler_* gauge at zero while the pod reads as healthy; that is the
+state BifrostReconcilerCensusStalled exists to catch in production, and the
+census timestamp is the same signal here.
+*/}}
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "bifrost.fullname" . }}-test-api
+  labels:
+    # Deliberately nais-api's label, not bifrost's: the backend NetworkPolicy
+    # admits ingress from pods labelled app=nais-api and from the metrics
+    # namespace, and nothing else. Anything else here reaches a Service it is
+    # not allowed to talk to, which tests the wrong thing.
+    app: nais-api
+    app.kubernetes.io/name: {{ include "bifrost.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: chart-test
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  containers:
+    - name: test
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      securityContext:
+        runAsNonRoot: true
+        # curlimages/curl declares its user by name (curl_user), and the
+        # kubelet refuses runAsNonRoot it cannot resolve to a number, so the
+        # uid is spelled out here.
+        runAsUser: 100
+        runAsGroup: 100
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      command:
+        - /bin/sh
+        - -ec
+        - |
+          base="http://{{ include "bifrost.fullname" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}"
+
+          echo "GET ${base}/healthz"
+          curl -sSf --max-time 10 "${base}/healthz" | grep -qx OK
+
+          echo "GET ${base}/metrics"
+          metrics=$(curl -sSf --max-time 10 "${base}/metrics")
+
+          # /metrics is registered ahead of the auth middleware so it is
+          # scrapeable without a key. A 200 with an exposition body is the
+          # assertion: if that ordering ever changes, curl -f fails on the 401
+          # here instead of leaving Prometheus quietly scraping nothing.
+          echo "${metrics}" | grep -q '^# HELP ' || {
+            echo "/metrics returned no exposition body"; exit 1; }
+          {{- if .Values.backend.reconciler.enabled }}
+
+          # A census that never ran leaves this at 0, which is exactly what the
+          # BifrostReconcilerCensusStalled alert fires on.
+          census=$(echo "${metrics}" | awk '$1 == "bifrost_reconciler_instances_updated_timestamp_seconds" { print $2 }')
+          echo "census timestamp: ${census:-<absent>}"
+          if [ -z "${census}" ]; then
+            echo "the reconciler is enabled but published no census timestamp"; exit 1
+          fi
+          case "${census}" in
+            0|0.0|0e+00) echo "the reconciler is enabled but has never completed a census"; exit 1 ;;
+          esac
+          {{- end }}
+
+          echo OK
+{{- end }}
