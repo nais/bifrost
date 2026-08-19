@@ -21,10 +21,14 @@ values:
   # API authentication (pre-shared key shared with nais-api).
   backend.auth.apiKeys:
     displayName: Bifrost API pre-shared key(s)
+    description: Comma-separated keys accepted by the API. Multiple values allow rotation without downtime.
     computed:
       template: '"{{ .Management.bifrost_api_key }}"'
   backend.auth.enforced:
     displayName: Enforce API authentication (reject unauthenticated requests)
+    description: Off means accept-then-enforce — unauthenticated calls are allowed but logged and counted. Turn on per environment once nais-api is confirmed sending the key.
+    config:
+      type: bool
   # Reconciler dark-launch toggles (off -> enabled+dryRun -> enabled).
   backend.reconciler.enabled:
     displayName: Enable the Unleash reconcile loop
