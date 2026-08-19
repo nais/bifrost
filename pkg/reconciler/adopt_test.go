@@ -17,6 +17,8 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,14 +28,52 @@ import (
 
 // unadopted mirrors what the 65 production instances actually look like: created
 // by bifrost before the label existed, so no managed-by label and no
-// desired-state annotation.
+// desired-state annotation — and running, so unleasherator has written a
+// Reconciled=True status on them. The status is part of the fixture rather than
+// an extra in each test because adoption is health-gated: an instance without it
+// is the exception (see setCondition), not the norm.
 func unadopted(t *testing.T, name string) *unleashv1.Unleash {
 	t.Helper()
 	rendered := renderManaged(t, name)
 	crd := rendered.DeepCopy()
 	delete(crd.Labels, kubernetes.LabelManagedBy)
 	delete(crd.Annotations, kubernetes.AnnotationDesiredState)
+	setCondition(crd, unleashv1.UnleashStatusConditionTypeReconciled, metav1.ConditionTrue)
 	return crd
+}
+
+// setCondition writes a status condition the way unleasherator does.
+func setCondition(crd *unleashv1.Unleash, conditionType string, status metav1.ConditionStatus) {
+	meta.SetStatusCondition(&crd.Status.Conditions, metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		Reason:             "Reconciling",
+		LastTransitionTime: metav1.Now(),
+	})
+}
+
+// updateStatus writes a condition onto the live object, standing in for
+// unleasherator reacting between two sweeps.
+func updateStatus(t *testing.T, c client.Client, crd *unleashv1.Unleash, conditionType string, status metav1.ConditionStatus) {
+	t.Helper()
+	live := get(t, c, crd.Namespace, crd.Name)
+	setCondition(live, conditionType, status)
+	if err := c.Update(context.Background(), live); err != nil {
+		t.Fatalf("update status of %s: %v", crd.Name, err)
+	}
+}
+
+// adoptedNames is the assertion most of the pacing tests want: which instances
+// carry the label now, in a form a failure message can print.
+func adoptedNames(t *testing.T, c client.Client, crds ...*unleashv1.Unleash) []string {
+	t.Helper()
+	var names []string
+	for _, crd := range crds {
+		if kubernetes.IsManagedByBifrost(get(t, c, crd.Namespace, crd.Name)) {
+			names = append(names, crd.Name)
+		}
+	}
+	return names
 }
 
 func newAdopter(c client.Client, cfg *config.Config) *UnleashReconciler {
@@ -212,8 +252,8 @@ func TestFleetSweep_AdoptsOnlyWhenAutoAdoptIsOn(t *testing.T) {
 }
 
 // The sweep adopts and then counts, in one pass, so a census never reports a
-// fleet the sweep has not finished with: after one iteration the instances it
-// just stamped are already on the managed side of the split.
+// fleet the sweep has not finished with: after one iteration the instance it
+// just stamped is already on the managed side of the split.
 func TestFleetSweep_CountsTheFleetAfterAdopting(t *testing.T) {
 	first := unadopted(t, "team-sweep-a")
 	second := unadopted(t, "team-sweep-b")
@@ -230,13 +270,17 @@ func TestFleetSweep_CountsTheFleetAfterAdopting(t *testing.T) {
 		t.Fatalf("runFleetSweep: %v", err)
 	}
 
-	if got := seriesValue(t, "bifrost_reconciler_managed_instances", nil); got != 2 {
-		t.Errorf("bifrost_reconciler_managed_instances = %v, want 2; the census ran before adoption finished", got)
+	// One per sweep, so one instance is on the managed side after a single
+	// iteration — the point of the assertion is that it is one and not zero,
+	// which is what a census running before adoption would report.
+	if got := seriesValue(t, "bifrost_reconciler_managed_instances", nil); got != 1 {
+		t.Errorf("bifrost_reconciler_managed_instances = %v, want 1; the census ran before adoption finished", got)
 	}
-	// The remainder is the opt-out, and it stays visible as unmanaged rather
-	// than disappearing from both sides of the split.
-	if got := seriesValue(t, "bifrost_reconciler_unmanaged_instances", nil); got != 1 {
-		t.Errorf("bifrost_reconciler_unmanaged_instances = %v, want 1", got)
+	// The remainder is the not-yet-adopted instance and the opt-out, and both
+	// stay visible as unmanaged rather than disappearing from both sides of the
+	// split.
+	if got := seriesValue(t, "bifrost_reconciler_unmanaged_instances", nil); got != 2 {
+		t.Errorf("bifrost_reconciler_unmanaged_instances = %v, want 2", got)
 	}
 }
 
@@ -504,5 +548,228 @@ func TestAdoptThenReconcile_LeavesALegacyInstanceUntouched(t *testing.T) {
 	}
 	if got := actionCount(t, "would_change", "missing_desired_state"); got != before+1 {
 		t.Errorf(`bifrost_reconciler_actions_total{action="would_change",reason="missing_desired_state"} = %v, want %v; the drift has to stay visible`, got, before+1)
+	}
+}
+
+// The whole point of the pacing. Unleasherator reconciles on label changes
+// (predicate.Or(GenerationChangedPredicate, LabelChangedPredicate) in its
+// SetupWithManager) at MaxConcurrentReconciles: 4, so a sweep that stamped the
+// whole fleet would wake one reconcile per instance at once — each of which may
+// converge a drifted workload and ends in a live connectivity check. The sweep
+// ticker is the pacing: one stamp per tick, the rest next time.
+func TestAdoptFleet_StampsAtMostOneInstancePerSweep(t *testing.T) {
+	first := unadopted(t, "team-pace-a")
+	second := unadopted(t, "team-pace-b")
+	third := unadopted(t, "team-pace-c")
+
+	c := newFakeClient(t, first, second, third)
+	r := newAdopter(c, testConfig())
+
+	before := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"})
+
+	for sweep := 1; sweep <= 3; sweep++ {
+		r.adoptFleet(context.Background())
+
+		if got := adoptedNames(t, c, first, second, third); len(got) != sweep {
+			t.Fatalf("after %d sweep(s) %d instances carry the label (%v), want %d; adoption must stamp one instance per tick",
+				sweep, len(got), got, sweep)
+		}
+		if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"}); got != before+float64(sweep) {
+			t.Fatalf(`adoptions_total{result="adopted"} = %v after %d sweep(s), want %v`, got, sweep, before+float64(sweep))
+		}
+	}
+
+	// And the sweep after the fleet is migrated is a no-op, not a fourth stamp.
+	r.adoptFleet(context.Background())
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"}); got != before+3 {
+		t.Errorf(`adoptions_total{result="adopted"} = %v after the fleet was adopted, want %v`, got, before+3)
+	}
+}
+
+// An instance that is degraded, or that has never reported a successful
+// reconcile, is the worst one to hand an extra unleasherator reconcile and a
+// connectivity check to. Skipping it is not a failure and not permanent: it
+// stays a candidate, and is adopted once its status says it is well.
+func TestAdoptFleet_SkipsAnUnhealthyCandidateAndRetriesItLater(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		unhappy func(*unleashv1.Unleash)
+	}{
+		{"no status at all", func(crd *unleashv1.Unleash) { crd.Status.Conditions = nil }},
+		{"reconciled false", func(crd *unleashv1.Unleash) {
+			setCondition(crd, unleashv1.UnleashStatusConditionTypeReconciled, metav1.ConditionFalse)
+		}},
+		{"reconciled unknown", func(crd *unleashv1.Unleash) {
+			setCondition(crd, unleashv1.UnleashStatusConditionTypeReconciled, metav1.ConditionUnknown)
+		}},
+		{"degraded", func(crd *unleashv1.Unleash) {
+			setCondition(crd, unleashv1.UnleashStatusConditionTypeDegraded, metav1.ConditionTrue)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			crd := unadopted(t, "team-unhealthy")
+			tt.unhappy(crd)
+
+			c := newFakeClient(t, crd)
+			r := newAdopter(c, testConfig())
+
+			adoptedBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"})
+			unhealthyBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "unhealthy"})
+
+			r.adoptFleet(context.Background())
+
+			if live := get(t, c, crd.Namespace, crd.Name); kubernetes.IsManagedByBifrost(live) {
+				t.Fatalf("adopted an instance whose status is %q; adoption is gated on the instance being healthy", tt.name)
+			}
+			if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"}); got != adoptedBefore {
+				t.Errorf(`adoptions_total{result="adopted"} = %v, want it unchanged at %v`, got, adoptedBefore)
+			}
+			if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "unhealthy"}); got != unhealthyBefore+1 {
+				t.Errorf(`adoptions_total{result="unhealthy"} = %v, want %v; a skipped candidate has to be countable`, got, unhealthyBefore+1)
+			}
+
+			// Unleasherator gets the instance healthy again; the next tick
+			// picks it up. A skip defers, it does not exclude.
+			updateStatus(t, c, crd, unleashv1.UnleashStatusConditionTypeDegraded, metav1.ConditionFalse)
+			updateStatus(t, c, crd, unleashv1.UnleashStatusConditionTypeReconciled, metav1.ConditionTrue)
+
+			r.adoptFleet(context.Background())
+
+			if live := get(t, c, crd.Namespace, crd.Name); !kubernetes.IsManagedByBifrost(live) {
+				t.Error("an instance skipped as unhealthy was never retried once it became healthy")
+			}
+		})
+	}
+}
+
+// The reason the sweep verifies before it stamps again: adoption's blast radius
+// is not the label, it is the reconcile the label triggers in unleasherator. If
+// the one instance we stamped came back degraded, the same thing is likely to
+// happen to the next 62, so adoption stops and stays stopped until a human has
+// looked.
+func TestAdoptFleet_HaltsWhenThePreviouslyStampedInstanceRegresses(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		condition string
+		status    metav1.ConditionStatus
+	}{
+		{"degraded", unleashv1.UnleashStatusConditionTypeDegraded, metav1.ConditionTrue},
+		{"reconciled flipped to false", unleashv1.UnleashStatusConditionTypeReconciled, metav1.ConditionFalse},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			first := unadopted(t, "team-halt-first")
+			c := newFakeClient(t, first)
+			r, log := newAdopterWithLog(c, testConfig())
+
+			r.adoptFleet(context.Background())
+			if live := get(t, c, first.Namespace, first.Name); !kubernetes.IsManagedByBifrost(live) {
+				t.Fatal("the first sweep adopted nothing; the rest of the test has no premise")
+			}
+
+			// The stamp landed and unleasherator reacted badly. A second
+			// instance appears in the meantime — it is the one that must not be
+			// touched now.
+			updateStatus(t, c, first, tt.condition, tt.status)
+			second := unadopted(t, "team-halt-second")
+			if err := c.Create(context.Background(), second); err != nil {
+				t.Fatalf("create second instance: %v", err)
+			}
+
+			// The gauge is process-global and other tests in this package may
+			// have set it, so it is zeroed here to assert the transition rather
+			// than a value that could have leaked in.
+			adoptionHalt.Set(0)
+			haltsBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "halted"})
+
+			r.adoptFleet(context.Background())
+
+			if live := get(t, c, second.Namespace, second.Name); kubernetes.IsManagedByBifrost(live) {
+				t.Errorf("%s was adopted after %s regressed to %s=%s; the sweep must halt instead", second.Name, first.Name, tt.condition, tt.status)
+			}
+			if got := seriesValue(t, "bifrost_reconciler_adoption_halted", nil); got != 1 {
+				t.Errorf("bifrost_reconciler_adoption_halted = %v, want 1; a halted sweep has to be visible without reading logs", got)
+			}
+			if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "halted"}); got != haltsBefore+1 {
+				t.Errorf(`adoptions_total{result="halted"} = %v, want %v`, got, haltsBefore+1)
+			}
+			if !strings.Contains(log.String(), first.Name) || !strings.Contains(log.String(), "level=error") {
+				t.Errorf("the halt did not name %s at error level; log was:\n%s", first.Name, log.String())
+			}
+		})
+	}
+}
+
+// A halt is a latch, not a rate limit. It says an instance bifrost touched went
+// bad and nobody has looked yet, so it must survive the instance recovering on
+// its own — recovery is exactly what a flapping instance does between two
+// sweeps, and resuming on it would migrate the fleet through the failure the
+// halt was raised for.
+func TestAdoptFleet_StaysHaltedOnSubsequentSweeps(t *testing.T) {
+	first := unadopted(t, "team-latch-first")
+	c := newFakeClient(t, first)
+	r := newAdopter(c, testConfig())
+
+	r.adoptFleet(context.Background())
+	updateStatus(t, c, first, unleashv1.UnleashStatusConditionTypeDegraded, metav1.ConditionTrue)
+
+	second := unadopted(t, "team-latch-second")
+	if err := c.Create(context.Background(), second); err != nil {
+		t.Fatalf("create second instance: %v", err)
+	}
+
+	r.adoptFleet(context.Background()) // halts here
+
+	// Everything that could plausibly look like "it is fine now": the degraded
+	// instance recovers, and a perfectly healthy candidate is waiting.
+	updateStatus(t, c, first, unleashv1.UnleashStatusConditionTypeDegraded, metav1.ConditionFalse)
+
+	adoptedBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"})
+	haltsBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "halted"})
+
+	for sweep := 0; sweep < 3; sweep++ {
+		r.adoptFleet(context.Background())
+	}
+
+	if live := get(t, c, second.Namespace, second.Name); kubernetes.IsManagedByBifrost(live) {
+		t.Errorf("%s was adopted by a later sweep; a halt must not clear itself when the instance recovers", second.Name)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"}); got != adoptedBefore {
+		t.Errorf(`adoptions_total{result="adopted"} = %v, want it unchanged at %v while halted`, got, adoptedBefore)
+	}
+	// Counted once per halt, not once per sweep: the gauge carries the state,
+	// so a rate() on the counter stays readable as "how often did this happen".
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "halted"}); got != haltsBefore {
+		t.Errorf(`adoptions_total{result="halted"} = %v after three more sweeps, want it counted once at %v`, got, haltsBefore)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_halted", nil); got != 1 {
+		t.Errorf("bifrost_reconciler_adoption_halted = %v, want it still 1", got)
+	}
+}
+
+// A tenant deleting their instance looks identical to the instance we stamped
+// vanishing, and there is no status left to judge either way. Halting the
+// migration on it would make an ordinary delete stop the fleet.
+func TestAdoptFleet_ContinuesWhenTheStampedInstanceIsDeleted(t *testing.T) {
+	first := unadopted(t, "team-gone-first")
+	second := unadopted(t, "team-gone-second")
+
+	c := newFakeClient(t, first)
+	r := newAdopter(c, testConfig())
+
+	r.adoptFleet(context.Background())
+	if err := c.Delete(context.Background(), get(t, c, first.Namespace, first.Name)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := c.Create(context.Background(), second); err != nil {
+		t.Fatalf("create second instance: %v", err)
+	}
+
+	r.adoptFleet(context.Background())
+
+	if live := get(t, c, second.Namespace, second.Name); !kubernetes.IsManagedByBifrost(live) {
+		t.Error("adoption stopped because the instance it had stamped was deleted; a delete is not a regression")
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_halted", nil); got == 1 && r.adoptionHalted {
+		t.Error("a deleted instance halted the sweep")
 	}
 }

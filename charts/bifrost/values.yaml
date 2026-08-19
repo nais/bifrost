@@ -35,7 +35,8 @@ backend:
   # The rollout is a sequence, and the two write switches below are mutually
   # exclusive: bifrost refuses to start with autoAdopt on and dryRun off.
   #   1. enabled + dryRun            — measure the instances already labelled
-  #   2. enabled + dryRun + autoAdopt — adopt the rest, measure the whole fleet
+  #   2. enabled + dryRun + autoAdopt — adopt the rest, one instance per resync
+  #                                      interval, measure the whole fleet
   #   3. enabled + dryRun            — autoAdopt off again; the sweep is now cost
   #   4. enabled                     — dryRun off, the reconciler converges
   # Step 4 only converges instances that carry a desired-state annotation.
@@ -54,7 +55,7 @@ backend:
     dryRun: true
     # Stamp app.kubernetes.io/managed-by=bifrost on unlabelled Unleash
     # instances in the instance namespace, so a fleet created before the label
-    # existed becomes visible to the reconciler in one observable event
+    # existed becomes visible to the reconciler as an observable, counted event
     # (bifrost_reconciler_adoptions_total) instead of one user PUT at a time.
     # Requires dryRun: true. Adoption stamps the label and never the
     # desired-state annotation — the only intent available for a legacy
@@ -62,6 +63,20 @@ backend:
     # visible are exactly the ones a writing reconciler must not converge.
     # An instance labelled bifrost.nais.io/adopt=false is left alone; only that
     # exact lowercase value opts out, and anything else is logged and adopted.
+    #
+    # It is paced, and turning it on therefore looks like nothing happening:
+    #   * at most ONE instance is stamped per resyncInterval, because
+    #     unleasherator reconciles on label changes, so a fleet-wide sweep
+    #     would wake a reconcile per instance at once — each one able to
+    #     converge a drifted workload and each ending in a live connectivity
+    #     check. 60 instances at the 10m default is roughly ten hours.
+    #   * only instances reporting Reconciled=True and not Degraded are
+    #     eligible; the rest are counted (result=unhealthy) and retried later.
+    #   * if the instance stamped last sweep goes Degraded=True or
+    #     Reconciled=False, adoption stops completely and
+    #     bifrost_reconciler_adoption_halted goes to 1. It does not recover on
+    #     its own: read the error log line, look at the instance, then restart
+    #     bifrost or toggle this flag.
     autoAdopt: false
     resyncInterval: "10m"
 

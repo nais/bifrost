@@ -96,8 +96,29 @@ spec:
           consequence: "Affected instances are not converging to their configuration, and an instance failing on intent_error has dropped out of the managed set without changing any other metric."
           action: "Break down by reason: sum by (action, reason) (bifrost_reconciler_actions_total). See docs/RECONCILER_RUNBOOK.md."
 
-      # Adoption is a one-shot sweep, so a sustained error rate means instances
-      # are being left invisible to the reconciler rather than a transient 409.
+      # Adoption paces itself at one instance per resync and stops entirely if
+      # the instance it stamped last goes bad, so this is the state that needs a
+      # human: nothing more will be adopted until somebody looks and restarts.
+      #
+      # Deliberately not wrapped in the reconciler.enabled conditional the census
+      # rule needs. The gauge is registered at process start and reads 0
+      # everywhere, including in a bifrost with no reconciler at all, so `> 0`
+      # cannot fire where the loop is off — and leaving the rule in place means a
+      # tenant that turns the reconciler on out of band is still covered.
+      - alert: BifrostAdoptionHalted
+        expr: bifrost_reconciler_adoption_halted > 0
+        for: 5m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost has halted Unleash fleet adoption after an instance it adopted stopped being healthy"
+          consequence: "No further instances will be adopted — the migration is stopped, not merely slowed — and the halt does not clear itself. Whatever is still unmanaged stays invisible to the reconciler until someone acts."
+          action: "Find the instance in the bifrost-backend logs (error, 'regressed after bifrost adopted it') and check its Unleash CR status and workload before restarting bifrost or toggling autoAdopt, which are the only things that clear the halt. See docs/RECONCILER_RUNBOOK.md."
+
+      # Adoption stamps one instance per sweep, so a sustained error rate means
+      # instances are being left invisible to the reconciler rather than a
+      # transient 409.
       - alert: BifrostAdoptionFailing
         expr: sum(rate(bifrost_reconciler_adoptions_total{result="error"}[15m])) > 0
         for: 30m

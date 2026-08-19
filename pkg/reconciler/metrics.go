@@ -101,12 +101,19 @@ var instancesUpdatedTimestamp = prometheus.NewGauge(
 // reconcile — it is the metadata write that lets one happen at all. Mixing them
 // would make sum(rate(actions_total)) stop meaning reconciles, and would put a
 // one-off migration spike inside the series the dark launch is read from.
-// The two series do not count the same thing, and the Help string says so: an
-// instance is stamped once, but a failed stamp is retried on every sweep, so the
-// error series counts attempts and can exceed the number of instances involved.
+// The series do not count the same thing, and the Help string says so: an
+// instance is stamped once, but a failed or health-deferred stamp is retried on
+// every sweep, so those series count attempts and can exceed the number of
+// instances involved. Reading a migration therefore means reading adopted as a
+// total (one per instance, and at most one per sweep) and unhealthy as a rate:
+// a steady non-zero unhealthy rate with a flat adopted total is a fleet that
+// never becomes eligible, which looks exactly like a finished migration if only
+// the total is watched.
 const (
-	adoptionAdopted = "adopted" // an instance was stamped with the managed-by label (once per instance)
-	adoptionError   = "error"   // a stamping attempt failed; retried on the next sweep
+	adoptionAdopted   = "adopted"   // an instance was stamped with the managed-by label (once per instance)
+	adoptionError     = "error"     // a stamping attempt failed; retried on the next sweep
+	adoptionUnhealthy = "unhealthy" // an instance was passed over because its status is not healthy; retried on a later sweep
+	adoptionHalted    = "halted"    // the sweep stopped adopting because an instance it stamped went bad (once per halt)
 )
 
 // adoptionsTotal makes "65 instances were adopted" an event that was observed
@@ -117,13 +124,31 @@ const (
 var adoptionsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "bifrost_reconciler_adoptions_total",
-		Help: "Fleet adoption outcomes: result=adopted counts instances stamped with the managed-by label, result=error counts failed stamping attempts (retried every sweep).",
+		Help: "Fleet adoption outcomes: result=adopted counts instances stamped with the managed-by label (at most one per sweep), result=error counts failed stamping attempts, result=unhealthy counts candidates passed over because their status was not healthy, result=halted counts the sweep stopping because a stamped instance went bad. Only adopted counts once per instance; the rest are per attempt and are retried every sweep.",
 	},
 	[]string{"result"},
 )
 
+// adoptionHalt is the one adoption fact a counter cannot express. result=halted
+// fires exactly once, at the moment the sweep gives up, so a rate() of it is
+// zero again minutes later while adoption is still — and stays — stopped. The
+// halt is a latched state that only a process restart or an autoAdopt toggle
+// clears, and a gauge is the only shape in which "we are not adopting anything
+// right now, and nobody has looked yet" survives long enough to be alerted on.
+//
+// Registered in init() like the rest, so it reads 0 in every bifrost process
+// including one with no reconciler at all. That is the right way round here:
+// unlike the census timestamp, 0 is the safe value, so no Helm gate is needed
+// to keep the alert quiet where the loop is switched off.
+var adoptionHalt = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "bifrost_reconciler_adoption_halted",
+		Help: "1 when fleet adoption has halted itself because an instance it stamped stopped being healthy; 0 otherwise. Cleared only by a process restart or by toggling autoAdopt.",
+	},
+)
+
 func init() {
-	prometheus.MustRegister(reconcilerActionsTotal, managedInstances, unmanagedInstances, instancesUpdatedTimestamp, adoptionsTotal)
+	prometheus.MustRegister(reconcilerActionsTotal, managedInstances, unmanagedInstances, instancesUpdatedTimestamp, adoptionsTotal, adoptionHalt)
 }
 
 // recordAction increments the action counter. Every call site must pass a
