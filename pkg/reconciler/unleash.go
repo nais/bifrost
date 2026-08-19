@@ -9,6 +9,8 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
@@ -22,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
@@ -61,14 +64,22 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Only touch instances bifrost owns; never a hand-authored or foreign CR.
+	// Counted, because this is not only the foreign-CR case: the watch predicate
+	// filters on the label but a RequeueAfter does not, so an instance that
+	// loses the label after having been reconciled comes back here exactly once
+	// and then falls out of the reconciled set for good.
 	if !kubernetes.IsManagedByBifrost(crd) {
+		recordAction(actionSkipped, reasonMissingLabel)
 		return ctrl.Result{}, nil
 	}
 
 	cfg, err := r.resolveIntent(crd)
 	if err != nil {
 		// Intent is unusable; do not thrash. Requeue on the slow resync so a
-		// later fix (or a corrected annotation) is picked up.
+		// later fix (or a corrected annotation) is picked up. Counted, because
+		// an instance that drops out of the managed set this way is otherwise
+		// invisible: it stops reporting in_sync and the dashboard reads healthy.
+		recordAction(actionIntentError, reasonNone)
 		log.WithError(err).Error("Failed to resolve desired-state intent; skipping reconcile")
 		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
@@ -82,15 +93,17 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	desired := kubernetes.BuildUnleashCRD(r.config, cfg)
 
-	if r.inSync(crd, &desired) {
-		reconcilerActionsTotal.WithLabelValues(actionInSync).Inc()
+	state := r.inSync(crd, &desired)
+	if state.inSync {
+		recordAction(actionInSync, reasonNone)
 		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
+	log = state.annotate(log)
 
 	// Observe mode (dark launch): record that a change is needed but do not write,
 	// so the blast radius can be measured before the reconciler is allowed to act.
 	if r.dryRun {
-		reconcilerActionsTotal.WithLabelValues(actionWouldChange).Inc()
+		recordAction(actionWouldChange, state.reason)
 		log.Info("Instance differs from desired configuration (dry-run: no changes applied)")
 		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
@@ -108,12 +121,12 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// old intent. A 409 instead triggers backoff and a re-read.
 	patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	if err := r.client.Patch(ctx, crd, patch); err != nil {
-		reconcilerActionsTotal.WithLabelValues(actionError).Inc()
+		recordAction(actionError, state.reason)
 		log.WithError(err).Error("Failed to patch instance toward desired configuration")
 		return ctrl.Result{}, err
 	}
 
-	reconcilerActionsTotal.WithLabelValues(actionChanged).Inc()
+	recordAction(actionChanged, state.reason)
 	log.Info("Reconciled instance to desired configuration")
 	return ctrl.Result{RequeueAfter: r.resync}, nil
 }
@@ -149,16 +162,59 @@ func (r *UnleashReconciler) resolveIntent(crd *unleashv1.Unleash) (*unleash.Conf
 	return kubernetes.LoadConfigFromCRD(crd).Build()
 }
 
+// syncState is the outcome of comparing a live instance to its render: whether
+// it matches, and if not, why. reason is one of a closed set and is safe as a
+// metric label; sections is open-ended and belongs only in the log.
+type syncState struct {
+	inSync   bool
+	reason   string
+	sections []string
+}
+
+// annotate attaches the drift cause to the log entry, so a would_change firing
+// can be attributed to a cause — and, for a spec mismatch, to the spec sections
+// involved — without re-rendering the instance by hand.
+func (s syncState) annotate(log *logrus.Entry) *logrus.Entry {
+	log = log.WithField("reason", s.reason)
+	if len(s.sections) > 0 {
+		log = log.WithField("spec_sections", strings.Join(s.sections, ","))
+	}
+	return log
+}
+
 // inSync reports whether the live spec and managed metadata already match the
-// desired render, so a no-op reconcile issues no patch.
-func (r *UnleashReconciler) inSync(live, desired *unleashv1.Unleash) bool {
+// desired render, so a no-op reconcile issues no patch. The checks are ordered
+// most to least significant: a spec mismatch is the cause an operator has to act
+// on, the metadata ones are backfill that dry-run can never clear on its own.
+func (r *UnleashReconciler) inSync(live, desired *unleashv1.Unleash) syncState {
 	if !equality.Semantic.DeepEqual(live.Spec, desired.Spec) {
-		return false
+		return syncState{reason: reasonSpecMismatch, sections: driftingSpecSections(&live.Spec, &desired.Spec)}
 	}
 	if live.GetLabels()[kubernetes.LabelManagedBy] != kubernetes.ManagedByBifrost {
-		return false
+		return syncState{reason: reasonMissingLabel}
 	}
-	return live.GetAnnotations()[kubernetes.AnnotationDesiredState] == desired.GetAnnotations()[kubernetes.AnnotationDesiredState]
+	if live.GetAnnotations()[kubernetes.AnnotationDesiredState] != desired.GetAnnotations()[kubernetes.AnnotationDesiredState] {
+		return syncState{reason: reasonIntentMismatch}
+	}
+	return syncState{inSync: true, reason: reasonNone}
+}
+
+// driftingSpecSections names the top-level UnleashSpec fields that differ. It
+// walks the struct reflectively rather than listing the fields so a field added
+// upstream is reported instead of silently omitted, and it reports names only:
+// the values can hold the federation secret nonce and rendered env vars, which
+// have no business in a log line.
+func driftingSpecSections(live, desired *unleashv1.UnleashSpec) []string {
+	liveFields := reflect.ValueOf(*live)
+	desiredFields := reflect.ValueOf(*desired)
+
+	var sections []string
+	for i := 0; i < liveFields.NumField(); i++ {
+		if !equality.Semantic.DeepEqual(liveFields.Field(i).Interface(), desiredFields.Field(i).Interface()) {
+			sections = append(sections, liveFields.Type().Field(i).Name)
+		}
+	}
+	return sections
 }
 
 // applyManagedMetadata copies bifrost's managed-by label and desired-state
@@ -187,8 +243,61 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err != nil {
 		return err
 	}
+	// The gauges are refreshed on a timer rather than per Reconcile. The List is
+	// served from the manager's cache, but running it per instance per resync
+	// makes the work quadratic in fleet size for a number that only has to be
+	// accurate enough to compare against the action counters.
+	if err := mgr.Add(manager.RunnableFunc(r.reportInstanceCounts)); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&unleashv1.Unleash{}, builder.WithPredicates(managed)).
 		Named("bifrost-unleash").
 		Complete(r)
+}
+
+// reportInstanceCounts keeps the fleet gauges current until the manager stops.
+// Added as a plain Runnable, so with leader election on only the leader reports
+// — matching the action counters, which only advance there.
+func (r *UnleashReconciler) reportInstanceCounts(ctx context.Context) error {
+	ticker := time.NewTicker(r.resync)
+	defer ticker.Stop()
+
+	for {
+		r.countInstances(ctx)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+// countInstances sets the fleet gauges from a List of the whole namespace and
+// partitions the result itself. Listing with a managed-by selector instead —
+// which is what this did — cannot observe an instance losing the label, because
+// that removes it from the count and from the reconciled set in the same step:
+// the gauge steps down by one and is indistinguishable from a deletion.
+//
+// A failure is logged and the previous values left in place: a zero would read
+// as "the fleet disappeared". The timestamp is deliberately not advanced, so a
+// census that keeps failing is visible as a stale one rather than as a plausible
+// steady state.
+func (r *UnleashReconciler) countInstances(ctx context.Context) {
+	list := &unleashv1.UnleashList{}
+	if err := r.client.List(ctx, list, client.InNamespace(r.config.Unleash.InstanceNamespace)); err != nil {
+		r.logger.WithError(err).Warn("Failed to count Unleash instances")
+		return
+	}
+
+	var managed float64
+	for i := range list.Items {
+		if kubernetes.IsManagedByBifrost(&list.Items[i]) {
+			managed++
+		}
+	}
+	managedInstances.Set(managed)
+	unmanagedInstances.Set(float64(len(list.Items)) - managed)
+	instancesUpdatedTimestamp.SetToCurrentTime()
 }

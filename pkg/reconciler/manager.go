@@ -17,8 +17,9 @@ import (
 
 // NewManager builds a controller-runtime manager hosting the Unleash reconciler.
 // The metrics server is disabled to avoid colliding with bifrost's HTTP server
-// port; leader election is opt-in so the manager is safe to run in every replica
-// once leases + RBAC are configured.
+// port — controller-runtime's registry is instead gathered by bifrost's own
+// /metrics route; leader election is opt-in so the manager is safe to run in
+// every replica once leases + RBAC are configured.
 func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, error) {
 	scheme := runtime.NewScheme()
 	if err := client_go_scheme.AddToScheme(scheme); err != nil {
@@ -30,6 +31,10 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 	if err := fqdnV1alpha3.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("add fqdn scheme: %w", err)
 	}
+
+	// controller-runtime discards its own logr output until a logger is set, so
+	// wire it to bifrost's logger before any of it is constructed.
+	ctrl.SetLogger(NewLogger(logger))
 
 	restCfg, err := ctrl.GetConfig()
 	if err != nil {

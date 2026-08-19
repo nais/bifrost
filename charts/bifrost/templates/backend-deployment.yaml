@@ -49,6 +49,8 @@ spec:
               value: {{ .Values.backend.image.tag | quote }}
             - name: GIN_MODE
               value: {{ if .Values.backend.debugEnabled }}debug{{ else }}release{{ end }}
+            - name: BIFROST_LOG_LEVEL
+              value: {{ .Values.backend.logLevel | quote }}
             # Google
             - name: BIFROST_GOOGLE_PROJECT_ID
               value: {{ .Values.backend.google.projectId | quote }}
