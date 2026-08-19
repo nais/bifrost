@@ -43,6 +43,10 @@ backend:
   # bifrost_reconciler_actions_total{action="would_change",
   # reason="missing_desired_state"} and never written.
   reconciler:
+    # Chart default stays off so a bare `helm install` does not start a control
+    # loop unannounced. Fasit sets it on for every environment via Feature.yaml,
+    # where the reasoning for making it a default rather than a per-environment
+    # opt-in is written down.
     enabled: false
     # Defaults to observe-only, so enabling the reconciler cannot start
     # writing by accident. Turning dry-run off is the deliberate last step,

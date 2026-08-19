@@ -30,13 +30,30 @@ values:
     config:
       type: bool
   # Reconciler rollout, in order: enabled+dryRun -> +autoAdopt -> -autoAdopt -> -dryRun.
+  #
+  # enabled and dryRun default on together, so every tenant runs the loop in
+  # observe mode. That costs one namespace List per resync and writes nothing.
+  # It is deliberately a default rather than a per-environment opt-in: nothing
+  # exports whether the reconciler is enabled, so while tenants differ, a zero
+  # bifrost_reconciler_instances_updated_timestamp_seconds is ambiguous between
+  # "switched off here" and "running but broken". Uniform means a zero
+  # timestamp is unambiguously the second, which is the one worth alerting on.
+  # Either can still be turned off for a single environment.
   backend.reconciler.enabled:
     displayName: Enable the Unleash reconcile loop
+    description: >-
+      On by default in observe mode. A tenant with no Unleash instances is expected to report
+      managed=0, unmanaged=0 with a non-zero census timestamp — that reads as "measured and empty",
+      not as "not running". See docs/RECONCILER_RUNBOOK.md.
+    computed:
+      template: 'true'
     config:
       type: bool
   backend.reconciler.dryRun:
     displayName: Reconciler dry-run (observe only, no writes)
     description: Must stay on while adoption is on — bifrost refuses to start with both adoption enabled and dry-run off. Turn off last, once adoption is off again.
+    computed:
+      template: 'true'
     config:
       type: bool
   backend.reconciler.autoAdopt:
