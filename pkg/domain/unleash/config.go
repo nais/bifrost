@@ -158,37 +158,52 @@ func MergeLists(values ...string) string {
 
 // Build validates and returns the Config, or returns an error if validation fails
 func (b *ConfigBuilder) Build() (*Config, error) {
+	if err := b.config.Validate(); err != nil {
+		return nil, err
+	}
+
+	return b.config, nil
+}
+
+// Validate reports whether the config is renderable.
+//
+// Split out of Build so a Config that arrives already-formed — deserialized
+// from the desired-state annotation rather than assembled by the builder — can
+// be held to the same rules. The reconciler treats that annotation as
+// authoritative, so an unvalidated one is rendered verbatim onto a live
+// instance.
+func (c *Config) Validate() error {
 	// Validate mutual exclusivity
-	if b.config.CustomVersion != "" && b.config.ReleaseChannelName != "" {
-		return nil, ErrBothVersionSourcesSet
+	if c.CustomVersion != "" && c.ReleaseChannelName != "" {
+		return ErrBothVersionSourcesSet
 	}
 
 	// Validate hostname
 	hostnameRegex := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
-	if !hostnameRegex.MatchString(b.config.Name) {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidHostname, b.config.Name)
+	if !hostnameRegex.MatchString(c.Name) {
+		return fmt.Errorf("%w: %s", ErrInvalidHostname, c.Name)
 	}
 
 	// Validate log level
 	validLogLevels := map[string]bool{
 		"debug": true, "info": true, "warn": true, "error": true, "fatal": true, "panic": true,
 	}
-	if !validLogLevels[b.config.LogLevel] {
-		return nil, ErrInvalidLogLevel
+	if !validLogLevels[c.LogLevel] {
+		return ErrInvalidLogLevel
 	}
 
 	// Validate database pool
-	if b.config.DatabasePoolMax < 1 || b.config.DatabasePoolMax > 10 {
-		return nil, ErrInvalidDatabasePool
+	if c.DatabasePoolMax < 1 || c.DatabasePoolMax > 10 {
+		return ErrInvalidDatabasePool
 	}
 
 	// Use validator for struct validation
 	validate := validator.New(validator.WithRequiredStructEnabled())
-	if err := validate.Struct(b.config); err != nil {
-		return nil, fmt.Errorf("validation failed: %w", err)
+	if err := validate.Struct(c); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	return b.config, nil
+	return nil
 }
 
 // VersionSource returns the source of the version configuration

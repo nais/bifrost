@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,15 +59,32 @@ func requestFor(crd *unleashv1.Unleash) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: crd.Namespace, Name: crd.Name}}
 }
 
+// intentFor builds a config the way production does — through the builder, so
+// it carries the defaults and passes validation. Building a bare unleash.Config
+// here would produce an intent the reconciler now rejects, and would not
+// resemble anything the API path ever writes.
+func intentFor(t *testing.T, name string) *unleash.Config {
+	t.Helper()
+	cfg, err := unleash.NewConfigBuilder().
+		WithName(name).
+		WithCustomVersion("1.2.3").
+		WithFederation("fixed-nonce", "", "", "").
+		Build()
+	if err != nil {
+		t.Fatalf("building intent: %v", err)
+	}
+	return cfg
+}
+
 // renderManaged produces a bifrost-managed, annotated CRD (with a fixed nonce so
 // rendering is deterministic).
-func renderManaged(name string) unleashv1.Unleash {
-	cfg := &unleash.Config{Name: name, CustomVersion: "1.2.3", FederationNonce: "fixed-nonce", EnableFederation: true}
-	return kubernetes.BuildUnleashCRD(testConfig(), cfg)
+func renderManaged(t *testing.T, name string) unleashv1.Unleash {
+	t.Helper()
+	return kubernetes.BuildUnleashCRD(testConfig(), intentFor(t, name))
 }
 
 func TestReconcile_ConvergesDrift(t *testing.T) {
-	desired := renderManaged("team-a")
+	desired := renderManaged(t, "team-a")
 	drifted := desired.DeepCopy()
 	drifted.Spec.ApiIngress.Class = "DRIFTED"         // an operator/manual edit
 	drifted.Spec.WebIngress.Host = "hijacked.example" // another drift
@@ -91,7 +109,7 @@ func TestReconcile_ConvergesDrift(t *testing.T) {
 }
 
 func TestReconcile_IgnoresUnmanaged(t *testing.T) {
-	desired := renderManaged("team-b")
+	desired := renderManaged(t, "team-b")
 	foreign := desired.DeepCopy()
 	delete(foreign.Labels, kubernetes.LabelManagedBy) // not bifrost-managed
 	foreign.Spec.ApiIngress.Class = "hand-authored"
@@ -113,7 +131,7 @@ func TestReconcile_IgnoresUnmanaged(t *testing.T) {
 }
 
 func TestReconcile_NoOpWhenInSync(t *testing.T) {
-	desired := renderManaged("team-c")
+	desired := renderManaged(t, "team-c")
 	obj := desired.DeepCopy()
 
 	c := newFakeClient(t, obj)
@@ -138,7 +156,7 @@ func TestReconcile_NoOpWhenInSync(t *testing.T) {
 }
 
 func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
-	desired := renderManaged("team-d")
+	desired := renderManaged(t, "team-d")
 	drifted := desired.DeepCopy()
 	drifted.Spec.ApiIngress.Class = "DRIFTED"
 
@@ -212,8 +230,7 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 	cfg := testConfig()
 
 	// Render exactly as the create path does, including minting the nonce.
-	intent := &unleash.Config{Name: "team-a", EnableFederation: true}
-	created := kubernetes.BuildUnleashCRD(cfg, intent)
+	created := kubernetes.BuildUnleashCRD(cfg, intentFor(t, "team-a"))
 	stored := applyCRDDefaults(t, &created)
 
 	scheme := runtime.NewScheme()
@@ -248,5 +265,66 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 	}
 	if live.ResourceVersion != stored.ResourceVersion {
 		t.Fatalf("in-sync reconcile must not write (resourceVersion %s → %s)", stored.ResourceVersion, live.ResourceVersion)
+	}
+}
+
+// The desired-state annotation is authoritative, so a valid-JSON-but-wrong
+// annotation would be rendered verbatim onto a live instance. Malformed JSON
+// already failed; these are the cases that used to get through.
+func TestResolveIntent_RejectsUnusableAnnotations(t *testing.T) {
+	cfg := testConfig()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	r := NewUnleashReconciler(nil, cfg, logger, time.Minute, true)
+
+	for _, tc := range []struct {
+		name, annotation, wantErr string
+	}{
+		{
+			name:       "empty object renders nothing usable",
+			annotation: `{}`,
+			wantErr:    "not a valid config",
+		},
+		{
+			name:       "annotation belonging to another instance",
+			annotation: `{"Name":"other-team","LogLevel":"warn","DatabasePoolMax":3}`,
+			wantErr:    "names \"other-team\"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			crd := &unleashv1.Unleash{}
+			crd.SetName("team-a")
+			crd.SetAnnotations(map[string]string{kubernetes.AnnotationDesiredState: tc.annotation})
+
+			_, err := r.resolveIntent(crd)
+			if err == nil {
+				t.Fatalf("expected an error for %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %q, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// A well-formed annotation for this instance must still be accepted.
+func TestResolveIntent_AcceptsValidAnnotation(t *testing.T) {
+	cfg := testConfig()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	r := NewUnleashReconciler(nil, cfg, logger, time.Minute, true)
+
+	crd := &unleashv1.Unleash{}
+	crd.SetName("team-a")
+	crd.SetAnnotations(map[string]string{
+		kubernetes.AnnotationDesiredState: `{"Name":"team-a","LogLevel":"warn","DatabasePoolMax":3,"ReleaseChannelName":"stable"}`,
+	})
+
+	got, err := r.resolveIntent(crd)
+	if err != nil {
+		t.Fatalf("valid annotation rejected: %v", err)
+	}
+	if got.Name != "team-a" {
+		t.Fatalf("Name = %q, want team-a", got.Name)
 	}
 }

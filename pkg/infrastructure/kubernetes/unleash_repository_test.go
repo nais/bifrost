@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -171,4 +172,33 @@ func TestCreate_ToleratesExistingNetworkPolicy(t *testing.T) {
 	created := &unleashv1.Unleash{}
 	require.NoError(t, client.Get(context.Background(),
 		ctrl.ObjectKey{Name: "team-a", Namespace: "unleash-ns"}, created))
+}
+
+// TEAMS_ALLOWED_TEAMS controls who may log in to the Unleash UI, independently
+// of federation. LoadConfigFromCRD feeds the desired-state annotation, so
+// losing it here does not just drop a value — it records the loss as
+// authoritative intent, which the reconciler then enforces on every resync.
+func TestLoadConfigFromCRD_KeepsAllowedTeamsWithoutFederation(t *testing.T) {
+	for _, federated := range []bool{false, true} {
+		name := "federation disabled"
+		if federated {
+			name = "federation enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			crd := &unleashv1.Unleash{
+				ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "unleash-ns"},
+				Spec: unleashv1.UnleashSpec{
+					ExtraEnvVars: []corev1.EnvVar{
+						{Name: "TEAMS_ALLOWED_TEAMS", Value: "team-a,team-b"},
+					},
+					Federation: unleashv1.UnleashFederationConfig{Enabled: federated},
+				},
+			}
+
+			cfg, err := LoadConfigFromCRD(crd).Build()
+			require.NoError(t, err)
+			assert.Equal(t, "team-a,team-b", cfg.AllowedTeams,
+				"the allowed-team list must survive regardless of federation")
+		})
+	}
 }
