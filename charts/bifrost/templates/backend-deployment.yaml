@@ -117,6 +117,7 @@ spec:
                   key: {{ .Values.backend.auth.secretKey }}
             {{- end }}
             # Reconciler (dark-launch via dry-run; see docs/RECONCILER_IMPROVEMENT_PLAN.md §6a).
+            # To stop it, and to know what stopping it does not stop: docs/RECONCILER_RUNBOOK.md.
             - name: BIFROST_RECONCILER_ENABLED
               value: {{ .Values.backend.reconciler.enabled | quote }}
             - name: BIFROST_RECONCILER_DRY_RUN
