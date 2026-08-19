@@ -225,10 +225,51 @@ func Setup(com *cobra.Command) {
 	}
 }
 
+// Validate rejects configuration that parsed but is unusable.
+//
+// The `,required` tag is not the guard it looks like: go-envconfig only checks
+// whether the variable was *found*, and os.LookupEnv reports a set-but-empty
+// variable as found. Every `,required` field can therefore still arrive as "".
+// For most of them that surfaces as a loud, obvious failure. For the ones below
+// it does not — an empty value silently *widens* scope instead of narrowing it,
+// which is the failure mode that looks like success.
+func (c *Config) Validate() error {
+	required := []struct {
+		env   string
+		value string
+	}{
+		// Every Unleash List/Get/Delete is namespaced by this, and so is the
+		// reconciler's informer. An empty namespace is metav1.NamespaceAll in
+		// both client-go and controller-runtime, so it does not mean "nothing"
+		// — it means every namespace in the cluster, including the tenant
+		// namespaces unleasherator owns.
+		{"BIFROST_UNLEASH_INSTANCE_NAMESPACE", c.Unleash.InstanceNamespace},
+		// The two halves of every Cloud SQL address, including the database and
+		// user Delete calls.
+		{"BIFROST_GOOGLE_PROJECT_ID", c.Google.ProjectID},
+		{"BIFROST_UNLEASH_SQL_INSTANCE_ID", c.Unleash.SQLInstanceID},
+		// The workload identity every rendered instance runs as, and therefore
+		// what it may reach in Google.
+		{"BIFROST_UNLEASH_INSTANCE_SERVICEACCOUNT", c.Unleash.InstanceServiceaccount},
+	}
+
+	for _, f := range required {
+		if strings.TrimSpace(f.value) == "" {
+			return fmt.Errorf("%s must be set to a non-empty value", f.env)
+		}
+	}
+
+	return nil
+}
+
 func New(ctx context.Context) *Config {
 	var c Config
 	if err := envconfig.Process(ctx, &c); err != nil {
 		panic(err)
+	}
+
+	if err := c.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
 	}
 
 	return &c

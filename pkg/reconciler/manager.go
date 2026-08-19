@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nais/bifrost/pkg/config"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
@@ -21,6 +22,11 @@ import (
 // /metrics route; leader election is opt-in so the manager is safe to run in
 // every replica once leases + RBAC are configured.
 func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, error) {
+	ns, err := instanceNamespace(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	scheme := runtime.NewScheme()
 	if err := client_go_scheme.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("add client-go scheme: %w", err)
@@ -49,7 +55,7 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 		// fails to start.
 		Cache: cache.Options{
 			DefaultNamespaces: map[string]cache.Config{
-				cfg.Unleash.InstanceNamespace: {},
+				ns: {},
 			},
 		},
 		Metrics:                 metricsserver.Options{BindAddress: "0"},
@@ -67,4 +73,22 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 	}
 
 	return mgr, nil
+}
+
+// instanceNamespace returns the namespace bifrost is scoped to, refusing an
+// empty one.
+//
+// Config.Validate already rejects this at startup, and this is not a duplicate
+// of that check but the place its consequence lands: cache.AllNamespaces is
+// metav1.NamespaceAll, so "" as the DefaultNamespaces key does not scope the
+// informer down, it scopes it up to the whole cluster. A single check guarding
+// a silent, scope-widening bug is one refactor away from being no check at all,
+// so the manager refuses independently — and the fleet adopter reuses this
+// rather than growing a third copy.
+func instanceNamespace(cfg *config.Config) (string, error) {
+	ns := strings.TrimSpace(cfg.Unleash.InstanceNamespace)
+	if ns == "" {
+		return "", fmt.Errorf("BIFROST_UNLEASH_INSTANCE_NAMESPACE is empty: an empty namespace means all namespaces, not none")
+	}
+	return ns, nil
 }
