@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -170,6 +172,18 @@ type ReconcilerConfig struct {
 	// would change but never writes. This is the dark-launch step — enable the
 	// reconciler with DryRun on, confirm the blast radius, then set it false.
 	DryRun bool `env:"BIFROST_RECONCILER_DRY_RUN,default=false"`
+	// AutoAdopt makes the reconciler stamp the managed-by label on unlabelled
+	// Unleash instances in its own namespace, so a fleet created before the
+	// label existed becomes visible in one observable event instead of being
+	// adopted one user PUT at a time over months.
+	//
+	// It is a separate switch from Enabled and orthogonal to DryRun on purpose:
+	// adoption writes, but only metadata, and the intended rollout is
+	// Enabled+DryRun+AutoAdopt — measure the fleet before converging it. Folding
+	// it into DryRun would make "observe only, no writes" untrue; folding it
+	// into Enabled would make it impossible to turn off once the fleet is
+	// adopted, which it should be, since the sweep is then pure cost.
+	AutoAdopt bool `env:"BIFROST_RECONCILER_AUTO_ADOPT,default=false"`
 	// ResyncInterval is how often every managed instance is re-rendered even
 	// without a CR event, so global-config changes propagate and drift heals.
 	ResyncInterval time.Duration `env:"BIFROST_RECONCILER_RESYNC_INTERVAL,default=10m"`
@@ -225,10 +239,101 @@ func Setup(com *cobra.Command) {
 	}
 }
 
+// Validate rejects configuration that parsed but is unusable.
+//
+// The `,required` tag is not the guard it looks like: go-envconfig only checks
+// whether the variable was *found*, and os.LookupEnv reports a set-but-empty
+// variable as found. Every `,required` field can therefore still arrive as "",
+// and for some of them an empty value silently *widens* scope instead of
+// narrowing it — an empty BIFROST_UNLEASH_INSTANCE_NAMESPACE is
+// metav1.NamespaceAll in both client-go and controller-runtime, so it does not
+// mean "nothing", it means every namespace in the cluster, including the tenant
+// namespaces unleasherator owns.
+//
+// The fields are found by walking the struct tags rather than being listed here.
+// A hand-written list covered 4 of the 14 `,required` fields and could not
+// notice a fifteenth being added, so what it encoded was not "the dangerous
+// ones" but "the ones somebody had thought about".
+func (c *Config) Validate() error {
+	if err := validateRequired(reflect.ValueOf(c).Elem()); err != nil {
+		return err
+	}
+
+	// Adoption exists to queue instances created before the desired-state
+	// annotation did, so every instance it stamps arrives without a recorded
+	// intent. The reconciler observes those and never writes them, which is what
+	// makes adoption survivable — but that is a rule in one function, and the
+	// blast radius on the other side of it is every instance in the namespace
+	// rewritten from a lossy read-back of its own spec. Adoption therefore only
+	// runs alongside a reconciler that cannot write at all.
+	if c.Reconciler.AutoAdopt && !c.Reconciler.DryRun {
+		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_DRY_RUN=true: adoption queues instances that carry no desired-state annotation, and converging one means rendering it from a lossy read-back of its own spec")
+	}
+
+	return nil
+}
+
+// validateRequired walks a config struct and holds every `,required` string
+// field to what the tag reads as: present and usable. Non-string fields are
+// left alone — envconfig fails to parse an empty duration or bool, so those
+// cannot arrive blank in the first place.
+func validateRequired(v reflect.Value) error {
+	t := v.Type()
+	for i := range t.NumField() {
+		field := t.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+
+		if field.Type.Kind() == reflect.Struct {
+			if err := validateRequired(v.Field(i)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		name, required := requiredEnvName(field)
+		if !required || field.Type.Kind() != reflect.String {
+			continue
+		}
+
+		value := v.Field(i).String()
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s must be set to a non-empty value", name)
+		}
+		// Padding is rejected rather than trimmed, because only some readers
+		// trim: a padded namespace passes as non-empty here, adopts instances
+		// under the trimmed name, and leaves the informer cache looking up the
+		// padded one forever.
+		if value != strings.TrimSpace(value) {
+			return fmt.Errorf("%s has leading or trailing whitespace: %q", name, value)
+		}
+	}
+
+	return nil
+}
+
+// requiredEnvName returns the variable a field reads and whether it is tagged
+// `,required`. The tag is `NAME[,opt[,opt...]]`, so the options are everything
+// after the first comma.
+func requiredEnvName(field reflect.StructField) (string, bool) {
+	tag, ok := field.Tag.Lookup("env")
+	if !ok {
+		return "", false
+	}
+
+	parts := strings.Split(tag, ",")
+	return parts[0], slices.Contains(parts[1:], "required")
+}
+
 func New(ctx context.Context) *Config {
 	var c Config
 	if err := envconfig.Process(ctx, &c); err != nil {
 		panic(err)
+	}
+
+	if err := c.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
 	}
 
 	return &c

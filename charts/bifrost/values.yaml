@@ -32,12 +32,33 @@ backend:
   # config. Dark-launched: enable with dryRun=true first, watch
   # bifrost_reconciler_actions_total{action="would_change"} — the reason label
   # says whether that is spec drift or metadata backfill — then set dryRun=false.
+  # The rollout is a sequence, and the two write switches below are mutually
+  # exclusive: bifrost refuses to start with autoAdopt on and dryRun off.
+  #   1. enabled + dryRun            — measure the instances already labelled
+  #   2. enabled + dryRun + autoAdopt — adopt the rest, measure the whole fleet
+  #   3. enabled + dryRun            — autoAdopt off again; the sweep is now cost
+  #   4. enabled                     — dryRun off, the reconciler converges
+  # Step 4 only converges instances that carry a desired-state annotation.
+  # Adopted instances have none, and are reported as
+  # bifrost_reconciler_actions_total{action="would_change",
+  # reason="missing_desired_state"} and never written.
   reconciler:
     enabled: false
     # Defaults to observe-only, so enabling the reconciler cannot start
-    # writing by accident. Turning dry-run off is the deliberate second
-    # step, after the would_change counter has been read.
+    # writing by accident. Turning dry-run off is the deliberate last step,
+    # after the would_change counter has been read and autoAdopt is off again.
     dryRun: true
+    # Stamp app.kubernetes.io/managed-by=bifrost on unlabelled Unleash
+    # instances in the instance namespace, so a fleet created before the label
+    # existed becomes visible to the reconciler in one observable event
+    # (bifrost_reconciler_adoptions_total) instead of one user PUT at a time.
+    # Requires dryRun: true. Adoption stamps the label and never the
+    # desired-state annotation — the only intent available for a legacy
+    # instance is a lossy read-back of its own spec — so the instances it makes
+    # visible are exactly the ones a writing reconciler must not converge.
+    # An instance labelled bifrost.nais.io/adopt=false is left alone; only that
+    # exact lowercase value opts out, and anything else is logged and adopted.
+    autoAdopt: false
     resyncInterval: "10m"
 
   unleash:
