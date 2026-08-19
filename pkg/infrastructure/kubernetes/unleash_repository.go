@@ -179,8 +179,13 @@ func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) err
 	return nil
 }
 
-// Update updates an existing Unleash instance
-func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) error {
+// Update updates an existing Unleash instance.
+//
+// opts.ExpectedResourceVersion turns the write into a conditional one. The CRD
+// is rendered wholesale from cfg, so without it a write that landed after the
+// caller read the instance is overwritten silently — the resourceVersion copied
+// from the Get below postdates the data cfg was built from and protects nothing.
+func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opts unleash.UpdateOptions) error {
 	// Get existing CRD
 	unleashOld, err := r.getUnleashCRD(ctx, cfg.Name)
 	if err != nil {
@@ -212,6 +217,12 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config) err
 
 	// Preserve metadata
 	unleashNew.ObjectMeta.ResourceVersion = unleashOld.ObjectMeta.ResourceVersion
+	if opts.ExpectedResourceVersion != "" {
+		// The caller's read is the one the config was derived from, so it is the
+		// version the write must be conditional on. Anything newer means another
+		// writer got in between and the API server rejects this with a Conflict.
+		unleashNew.ObjectMeta.ResourceVersion = opts.ExpectedResourceVersion
+	}
 	unleashNew.ObjectMeta.CreationTimestamp = unleashOld.ObjectMeta.CreationTimestamp
 	unleashNew.ObjectMeta.Generation = unleashOld.ObjectMeta.Generation
 	unleashNew.ObjectMeta.UID = unleashOld.ObjectMeta.UID
@@ -319,11 +330,13 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 	instance := &unleash.Instance{
 		Name:      crd.GetName(),
 		Namespace: crd.GetNamespace(),
-		CreatedAt: crd.ObjectMeta.CreationTimestamp.Time,
-		Version:   crd.Status.Version,
-		IsReady:   crd.IsReady(),
-		APIUrl:    fmt.Sprintf("https://%s/api/", crd.Spec.ApiIngress.Host),
-		WebUrl:    fmt.Sprintf("https://%s/", crd.Spec.WebIngress.Host),
+		// Carried so a caller can make a later write conditional on this read.
+		ResourceVersion: crd.GetResourceVersion(),
+		CreatedAt:       crd.ObjectMeta.CreationTimestamp.Time,
+		Version:         crd.Status.Version,
+		IsReady:         crd.IsReady(),
+		APIUrl:          fmt.Sprintf("https://%s/api/", crd.Spec.ApiIngress.Host),
+		WebUrl:          fmt.Sprintf("https://%s/", crd.Spec.WebIngress.Host),
 
 		// Federation configuration
 		EnableFederation:  crd.Spec.Federation.Enabled,

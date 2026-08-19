@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,12 @@ func (m *MockDatabaseManager) DeleteSecret(ctx context.Context, name string) err
 // MockUnleashRepository mocks the unleash repository for testing
 type MockUnleashRepository struct {
 	instances map[string]*domainUnleash.Instance
+
+	// beforeUpdate runs at the top of Update, before its precondition is
+	// checked. It is how a test models another writer — a reconciler, a second
+	// client — landing between the handler's read and the repository's write,
+	// which is the only place the lost-update race can happen.
+	beforeUpdate func()
 }
 
 func NewMockUnleashRepository() *MockUnleashRepository {
@@ -100,14 +107,41 @@ func (m *MockUnleashRepository) Create(ctx context.Context, config *domainUnleas
 	return nil
 }
 
-func (m *MockUnleashRepository) Update(ctx context.Context, config *domainUnleash.Config) error {
+// nextResourceVersion models the API server bumping the version on every write,
+// so a caller holding the pre-write version is detectably stale.
+func nextResourceVersion(current string) string {
+	n, err := strconv.Atoi(current)
+	if err != nil {
+		// Instances in tests that do not care about concurrency leave it empty;
+		// keep them at "" so their writes stay unconditional.
+		return current
+	}
+	return strconv.Itoa(n + 1)
+}
+
+func (m *MockUnleashRepository) Update(ctx context.Context, config *domainUnleash.Config, opts domainUnleash.UpdateOptions) error {
+	if m.beforeUpdate != nil {
+		m.beforeUpdate()
+	}
 	if _, ok := m.instances[config.Name]; !ok {
 		return errors.New("instance not found")
 	}
 	existing := m.instances[config.Name]
+
+	// Mirror the API server: a supplied resourceVersion makes the write
+	// conditional, and a stale one is rejected rather than applied.
+	if opts.ExpectedResourceVersion != "" && opts.ExpectedResourceVersion != existing.ResourceVersion {
+		return apierrors.NewConflict(
+			schema.GroupResource{Group: "unleash.nais.io", Resource: "unleashes"},
+			config.Name,
+			errors.New("the object has been modified; please apply your changes to the latest version and try again"),
+		)
+	}
+
 	m.instances[config.Name] = &domainUnleash.Instance{
 		Name:               config.Name,
 		Namespace:          existing.Namespace,
+		ResourceVersion:    nextResourceVersion(existing.ResourceVersion),
 		ReleaseChannelName: config.ReleaseChannelName,
 		CustomVersion:      config.CustomVersion,
 		Version:            existing.Version,
@@ -966,6 +1000,58 @@ func TestUpdateInstance_PreservesUnionOfDivergedLists(t *testing.T) {
 	require.NotNil(t, updated)
 	assert.Equal(t, "team-a,team-b", updated.AllowedTeams, "preserving must not drop either side")
 	assert.Equal(t, "team-a,team-b", updated.AllowedNamespaces)
+}
+
+// The handler reads the instance, merges the request body onto what it read,
+// and only then writes. A write landing in that window used to be overwritten
+// wholesale: the migration reconciler moving an instance onto a release channel
+// was reverted to the custom version the caller had read, with a 200 back to the
+// caller and no trace that anything was lost.
+func TestUpdateInstance_ConflictingWriteIsRefused(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	pre := federatedInstance("fed-instance", "team-a")
+	pre.ResourceVersion = "1"
+	pre.ReleaseChannelName = ""
+	pre.CustomVersion = "v5.1.2"
+	repo.instances["fed-instance"] = pre
+
+	// The migration reconciler writes through the repository directly, so it is
+	// not serialized by the service's per-instance lock and can land here.
+	repo.beforeUpdate = func() {
+		migrated := federatedInstance("fed-instance", "team-a")
+		migrated.ResourceVersion = "2"
+		migrated.ReleaseChannelName = "stable-v6"
+		repo.instances["fed-instance"] = migrated
+	}
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"log_level": "debug",
+	})
+	assert.Equal(t, http.StatusConflict, w.Code, "Response: %s", w.Body.String())
+
+	var body ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "conflict", body.Error)
+
+	current := repo.instances["fed-instance"]
+	require.NotNil(t, current)
+	assert.Equal(t, "stable-v6", current.ReleaseChannelName, "the migration must survive the losing update")
+	assert.Empty(t, current.CustomVersion, "the stale custom version must not be written back")
+}
+
+// The precondition must only reject genuine conflicts: an update on an instance
+// nobody else touched still has to go through.
+func TestUpdateInstance_UndisturbedWriteSucceeds(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	instance := federatedInstance("fed-instance", "team-a")
+	instance.ResourceVersion = "1"
+	repo.instances["fed-instance"] = instance
+
+	w := updateInstanceRequest(t, repo, "fed-instance", map[string]any{
+		"log_level": "debug",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, "Response: %s", w.Body.String())
+	assert.Equal(t, "2", repo.instances["fed-instance"].ResourceVersion, "the write must have landed")
 }
 
 // Create must refuse an instance that already exists. Without this, a duplicate

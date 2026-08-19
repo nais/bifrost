@@ -25,26 +25,33 @@ var (
 	ErrInvalidDatabasePool = errors.New("database pool max must be between 1 and 10")
 )
 
-// Config represents the configuration for an Unleash instance
+// Config represents the configuration for an Unleash instance.
+//
+// It is persisted verbatim in the desired-state annotation, so its JSON is a
+// wire format, not an implementation detail. The tags spell out the names the
+// annotation has always used (the Go identifiers, which is what an untagged
+// json.Marshal produced) so that renaming a field is a deliberate, visible
+// format change rather than a silent one. Any change to the fields here needs
+// kubernetes.IntentSchemaVersion bumped in the same commit.
 type Config struct {
 	// Identity
-	Name string
+	Name string `json:"Name"`
 
 	// Version configuration (mutually exclusive)
-	CustomVersion      string
-	ReleaseChannelName string
+	CustomVersion      string `json:"CustomVersion"`
+	ReleaseChannelName string `json:"ReleaseChannelName"`
 
 	// Federation settings
-	EnableFederation  bool
-	FederationNonce   string
-	AllowedTeams      string
-	AllowedNamespaces string
-	AllowedClusters   string
+	EnableFederation  bool   `json:"EnableFederation"`
+	FederationNonce   string `json:"FederationNonce"`
+	AllowedTeams      string `json:"AllowedTeams"`
+	AllowedNamespaces string `json:"AllowedNamespaces"`
+	AllowedClusters   string `json:"AllowedClusters"`
 
 	// Operational settings
-	LogLevel                  string
-	DatabasePoolMax           int
-	DatabasePoolIdleTimeoutMs int
+	LogLevel                  string `json:"LogLevel"`
+	DatabasePoolMax           int    `json:"DatabasePoolMax"`
+	DatabasePoolIdleTimeoutMs int    `json:"DatabasePoolIdleTimeoutMs"`
 }
 
 // ConfigBuilder provides a builder pattern for creating Config instances

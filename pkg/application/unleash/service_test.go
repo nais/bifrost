@@ -11,6 +11,8 @@ import (
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // fakeDBManager records calls and can be told to fail a specific step.
@@ -91,6 +93,12 @@ func (f *fakeDBManager) DeleteSecret(_ context.Context, _ string) error {
 type fakeRepo struct {
 	failCreate bool
 	calls      []string
+
+	// updateOpts captures the preconditions Update was called with, so a test
+	// can assert the caller's resourceVersion actually reaches the repository.
+	updateOpts unleash.UpdateOptions
+	// updateErr, when set, is what Update returns.
+	updateErr error
 }
 
 func (f *fakeRepo) record(c string)      { f.calls = append(f.calls, c) }
@@ -105,8 +113,14 @@ func (f *fakeRepo) Get(context.Context, string) (*unleash.Instance, error) {
 func (f *fakeRepo) GetCRD(context.Context, string) (*unleashv1.Unleash, error) {
 	return &unleashv1.Unleash{}, nil
 }
-func (f *fakeRepo) Update(context.Context, *unleash.Config) error { f.record("Update"); return nil }
-func (f *fakeRepo) Delete(context.Context, string) error          { f.record("Delete"); return nil }
+
+func (f *fakeRepo) Update(_ context.Context, _ *unleash.Config, opts unleash.UpdateOptions) error {
+	f.record("Update")
+	f.updateOpts = opts
+	return f.updateErr
+}
+
+func (f *fakeRepo) Delete(context.Context, string) error { f.record("Delete"); return nil }
 func (f *fakeRepo) Create(_ context.Context, _ *unleash.Config) error {
 	f.record("Create")
 	if f.failCreate {
@@ -267,5 +281,37 @@ func TestCreate_SerializesConcurrentCreatesForSameName(t *testing.T) {
 				t.Fatalf("create sequences interleaved at %d: %v", i, db.calls)
 			}
 		}
+	}
+}
+
+// The precondition is the caller's, not the service's: Service re-reads the
+// instance for its own logging, and using that read would only protect the
+// microseconds it owns rather than the window the caller has been holding.
+func TestUpdate_PassesCallerPreconditionToRepository(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := newTestService(repo, &fakeDBManager{})
+
+	_, err := svc.Update(context.Background(), &unleash.Config{Name: "team-a"},
+		unleash.UpdateOptions{ExpectedResourceVersion: "42"})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if repo.updateOpts.ExpectedResourceVersion != "42" {
+		t.Fatalf("ExpectedResourceVersion = %q, want 42", repo.updateOpts.ExpectedResourceVersion)
+	}
+}
+
+// The handler decides what a conflict means for the client, so the service must
+// hand it back recognisable rather than folding it into a generic failure.
+func TestUpdate_ReturnsConflictUnwrapped(t *testing.T) {
+	conflict := apierrors.NewConflict(
+		schema.GroupResource{Group: "unleash.nais.io", Resource: "unleashes"}, "team-a", errors.New("modified"))
+	repo := &fakeRepo{updateErr: conflict}
+	svc := newTestService(repo, &fakeDBManager{})
+
+	_, err := svc.Update(context.Background(), &unleash.Config{Name: "team-a"},
+		unleash.UpdateOptions{ExpectedResourceVersion: "42"})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("err = %v, want a Kubernetes conflict", err)
 	}
 }

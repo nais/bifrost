@@ -28,6 +28,11 @@ type Instance struct {
 	AllowedNamespaces string
 	AllowedClusters   string
 
+	// ResourceVersion is the Kubernetes optimistic-concurrency token of the
+	// object this instance was read from. Pass it back in UpdateOptions to make
+	// a write conditional on nobody having changed the instance since the read.
+	ResourceVersion string
+
 	// Read-only status from CRD
 	ResolvedImage         string
 	ChannelNameFromStatus string

@@ -191,7 +191,11 @@ func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetCha
 		return
 	}
 
-	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
+	// No resourceVersion precondition: cfg is rebuilt from the CRD read a few
+	// lines above, so the window is one call wide, and a conflict would fail a
+	// one-shot batch that never retries. The API update path, which merges a
+	// request body onto a much older read, does pass one.
+	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
 		log.WithError(err).Error("Failed to update instance to target channel")
 		state.status = statusFailed
 		r.pending.remove(name)
@@ -238,7 +242,14 @@ func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel 
 		return err
 	}
 
-	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
+	// No precondition, and unlike the migrate call this window is not one call
+	// wide: originalValue was captured before waitForHealthy, which runs for up
+	// to MigrationHealthTimeout (5m by default). A user PUT landing inside that
+	// window is reverted here. A precondition would not help — it would only
+	// turn a silent revert into a failed rollback, leaving the instance on the
+	// version the migration could not make healthy. Recording it so the choice
+	// is visible rather than accidental.
+	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
 		log.WithError(err).Error("Failed to rollback instance to original channel")
 		return err
 	}
