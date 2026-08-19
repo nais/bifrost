@@ -320,9 +320,17 @@ and rolled back instantly. **No breaking change goes straight to enforcing.**
 | **PSK auth** | no keys configured | keys set, `BIFROST_AUTH_ENFORCED=false` (accept-then-enforce) — unauthenticated calls allowed **and counted** | `BIFROST_AUTH_ENFORCED=true` — 401 on missing key | `bifrost_api_auth_requests_total{outcome="unauthenticated_allowed"}` → 0 |
 | **Reconciler** | `BIFROST_RECONCILER_ENABLED=false` | enabled + `BIFROST_RECONCILER_DRY_RUN=true` — computes the diff, **counts** what it would change, patches nothing | `BIFROST_RECONCILER_DRY_RUN=false` — converges | `bifrost_reconciler_actions_total{action="would_change"}` understood/expected |
 
+Read the reconciler's gauges together, and check the freshness stamp first: the counters and gauges
+are registered unconditionally, so `bifrost_reconciler_managed_instances 0` is also what a bifrost
+with the reconciler switched off publishes. `bifrost_reconciler_instances_updated_timestamp_seconds`
+is non-zero only after a census has actually run, which is what makes the observe step's "the loop
+is running and sees N instances" readable at all;
+`bifrost_reconciler_unmanaged_instances` is the fleet the loop is *not* responsible for, so a rising
+unmanaged count next to a falling managed one is instances dropping out, not instances being deleted.
+
 Bifrost exposes `/metrics` (unauthenticated, scraped by the existing ServiceMonitor) for the API-side
-counters; the reconciler manager exposes its own counters on its metrics port. Build a dashboard per
-ramp before enabling observe mode.
+counters. The manager's own metrics listener is disabled to avoid a second port, so controller-runtime's
+registry is merged into that same endpoint. Build a dashboard per ramp before enabling observe mode.
 
 ## 7. Risks & mitigations
 
