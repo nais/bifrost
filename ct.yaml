@@ -1,3 +1,7 @@
+# Passed explicitly with --config in .github/workflows/chart.yaml. ct discovers
+# its configuration from CT_CONFIG_DIR, which chart-testing-action sets to its
+# own etc directory — so this file is picked up when ct runs from a shell in the
+# repo root, and silently ignored in CI unless it is named on the command line.
 # chart-testing configuration. Unleasherator gets by without one because its
 # chart workflow stamps a date-based version into Chart.yaml before linting, so
 # ct's version-increment check always sees a bump. Bifrost's chart version is

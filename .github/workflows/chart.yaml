@@ -51,14 +51,14 @@ jobs:
       - name: Run chart-testing (list-changed)
         id: list-changed
         run: |
-          changed=$(ct list-changed --target-branch ${{ github.event.repository.default_branch }})
+          changed=$(ct list-changed --config ct.yaml --target-branch ${{ github.event.repository.default_branch }})
           if [[ -n "$changed" ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run chart-testing (lint)
         if: steps.list-changed.outputs.changed == 'true'
-        run: ct lint --target-branch ${{ github.event.repository.default_branch }}
+        run: ct lint --config ct.yaml --target-branch ${{ github.event.repository.default_branch }}
 
       - name: Set up Go
         if: steps.list-changed.outputs.changed == 'true'
@@ -106,6 +106,7 @@ jobs:
         if: steps.list-changed.outputs.changed == 'true'
         run: |
           ct install \
+            --config ct.yaml \
             --charts ./charts/bifrost \
             --target-branch ${{ github.event.repository.default_branch }} \
             --namespace "${TEST_NAMESPACE}"
