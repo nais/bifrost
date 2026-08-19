@@ -31,12 +31,35 @@ import (
 const defaultResyncInterval = 10 * time.Minute
 
 // UnleashReconciler converges bifrost-managed Unleash CRs to their desired spec.
+//
+// The two adoption fields hold the fleet sweep's cross-tick state: which
+// instance the previous tick stamped, and whether adoption has halted itself
+// because that instance went bad. They are plain fields rather than anything
+// persisted because only runFleetSweep's single goroutine reads or writes them
+// — Reconcile never touches them — and bifrost is single-replica (the chart pins
+// replicas: 1 and leader election is off by default), so there is no second
+// writer to coordinate with.
+//
+// The cost of keeping it in memory is that a restart forgets both: a restarted
+// bifrost has no instance to verify, so the next sweep stamps immediately, and a
+// halt does not survive the restart. That is the intended escape hatch — a halt
+// is cleared by restarting or by toggling autoAdopt — but it also means a
+// crash-looping bifrost with autoAdopt on would keep adopting one instance per
+// start with nothing verified in between. bifrost_reconciler_adoption_halted
+// going 1 -> 0 without a deliberate change is the signal for that.
 type UnleashReconciler struct {
 	client client.Client
 	config *config.Config
 	logger *logrus.Logger
 	resync time.Duration
 	dryRun bool
+
+	// adoptionWatched is the name of the instance stamped by the most recent
+	// sweep that stamped anything, empty before the first one.
+	adoptionWatched string
+	// adoptionHalted latches when that instance is later found degraded; it is
+	// never cleared in-process.
+	adoptionHalted bool
 }
 
 // NewUnleashReconciler creates a reconciler. A non-positive resync falls back to

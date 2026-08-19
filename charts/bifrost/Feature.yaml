@@ -64,6 +64,13 @@ values:
       adopted instance carries no recorded intent and converging one means rendering it from a lossy read-back of its
       own spec. Label an instance bifrost.nais.io/adopt=false (that exact lowercase value) to keep it out; anything
       else is logged and adopted.
+      Expect this to look like nothing happened: at most ONE instance is adopted per resync interval (10m by
+      default), and only instances whose status says Reconciled=True and not Degraded — a label change wakes a
+      reconcile in unleasherator, so stamping a whole fleet at once would converge every drifted instance
+      simultaneously. A fleet of 60 takes about ten hours. If an instance goes degraded after bifrost stamps it,
+      adoption halts for good and bifrost_reconciler_adoption_halted goes to 1; only a restart or toggling this
+      switch off and on again resumes it. Watch bifrost_reconciler_adoptions_total (result=adopted, unhealthy,
+      halted) rather than the logs.
     config:
       type: bool
 
