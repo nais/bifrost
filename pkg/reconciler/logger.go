@@ -22,34 +22,58 @@ type logrusSink struct {
 	entry *logrus.Entry
 }
 
+// traceVerbosity is the logr level from which framework output is treated as
+// trace rather than debug. controller-runtime logs its per-item "Reconciling" /
+// "Reconcile successful" / "Reconcile done, requeueing" lines at V(5) — two to
+// three JSON lines per instance per resync and per CR event — which is worth
+// having on demand but has to be asked for explicitly, not picked up as a side
+// effect of turning bifrost's own debug logging on.
+const traceVerbosity = 4
+
 // NewLogger returns a logr.Logger writing to logger, for ctrl.SetLogger.
 func NewLogger(logger *logrus.Logger) logr.Logger {
+	if logger == nil {
+		// controller-runtime calls Enabled on the sink before anything else, so
+		// a nil logger would panic there — at manager construction, far from
+		// whoever forgot to pass one.
+		logger = logrus.StandardLogger()
+	}
 	return logr.New(logrusSink{entry: logrus.NewEntry(logger)})
 }
 
 func (s logrusSink) Init(logr.RuntimeInfo) {}
 
 // Enabled maps logr verbosity onto logrus levels: V(0) is the framework's own
-// info output, anything more verbose is per-reconcile chatter that only appears
-// when bifrost itself is set to debug.
+// info output, low verbosities are diagnostics that follow bifrost's debug
+// level, and the per-item chatter from traceVerbosity up needs trace.
 func (s logrusSink) Enabled(level int) bool {
-	if level > 0 {
+	switch {
+	case level >= traceVerbosity:
+		return s.entry.Logger.IsLevelEnabled(logrus.TraceLevel)
+	case level > 0:
 		return s.entry.Logger.IsLevelEnabled(logrus.DebugLevel)
+	default:
+		return s.entry.Logger.IsLevelEnabled(logrus.InfoLevel)
 	}
-	return s.entry.Logger.IsLevelEnabled(logrus.InfoLevel)
 }
 
 func (s logrusSink) Info(level int, msg string, keysAndValues ...any) {
 	entry := s.entry.WithFields(logrusFields(keysAndValues))
-	if level > 0 {
+	switch {
+	case level >= traceVerbosity:
+		entry.Trace(msg)
+	case level > 0:
 		entry.Debug(msg)
-		return
+	default:
+		entry.Info(msg)
 	}
-	entry.Info(msg)
 }
 
+// Error applies WithError last on purpose: logr callers are free to pass a
+// key/value pair named "error", and applying the fields afterwards would let it
+// overwrite the actual error string the framework is reporting.
 func (s logrusSink) Error(err error, msg string, keysAndValues ...any) {
-	s.entry.WithError(err).WithFields(logrusFields(keysAndValues)).Error(msg)
+	s.entry.WithFields(logrusFields(keysAndValues)).WithError(err).Error(msg)
 }
 
 func (s logrusSink) WithValues(keysAndValues ...any) logr.LogSink {

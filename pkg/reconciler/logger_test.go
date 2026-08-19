@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -79,6 +80,30 @@ func TestLogrusSink_MapsLogrOutputToLogrus(t *testing.T) {
 			want: map[string]string{"level": "debug", "msg": "chatter"},
 		},
 		{
+			name:  "per-item framework chatter needs trace, not debug",
+			level: logrus.DebugLevel,
+			log: func(_ *testing.T, l *logrus.Logger) {
+				NewLogger(l).V(5).Info("Reconciling")
+			},
+			empty: true,
+		},
+		{
+			name:  "per-item framework chatter appears at trace",
+			level: logrus.TraceLevel,
+			log: func(_ *testing.T, l *logrus.Logger) {
+				NewLogger(l).V(5).Info("Reconciling")
+			},
+			want: map[string]string{"level": "trace", "msg": "Reconciling"},
+		},
+		{
+			name:  "a keysAndValues pair named error does not shadow the real one",
+			level: logrus.InfoLevel,
+			log: func(_ *testing.T, l *logrus.Logger) {
+				NewLogger(l).Error(errors.New("the real failure"), "Reconciler error", "error", "a caller-supplied string")
+			},
+			want: map[string]string{"error": "the real failure"},
+		},
+		{
 			name:  "a dangling key does not panic",
 			level: logrus.InfoLevel,
 			log: func(_ *testing.T, l *logrus.Logger) {
@@ -111,4 +136,41 @@ func TestLogrusSink_MapsLogrOutputToLogrus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Enabled is what controller-runtime asks before it renders a line at all, so a
+// wrong answer here is the difference between silence and one log line per
+// instance per resync. It is checked directly because the table above can only
+// observe it through output that has already been formatted.
+func TestLogrusSink_EnabledFollowsTheConfiguredLevel(t *testing.T) {
+	cases := []struct {
+		level     logrus.Level
+		verbosity int
+		want      bool
+	}{
+		{logrus.WarnLevel, 0, false}, // the framework's own info output is below warn
+		{logrus.InfoLevel, 0, true},
+		{logrus.InfoLevel, 1, false},
+		{logrus.DebugLevel, 1, true},
+		{logrus.DebugLevel, 3, true},
+		{logrus.DebugLevel, 4, false}, // per-item chatter must be asked for
+		{logrus.DebugLevel, 5, false},
+		{logrus.TraceLevel, 5, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s/V(%d)", tc.level, tc.verbosity), func(t *testing.T) {
+			logger, _ := captureLogger(tc.level)
+			if got := NewLogger(logger).V(tc.verbosity).Enabled(); got != tc.want {
+				t.Errorf("V(%d).Enabled() at %s = %v, want %v", tc.verbosity, tc.level, got, tc.want)
+			}
+		})
+	}
+}
+
+// ctrl.SetLogger runs before anything else, and controller-runtime calls
+// Enabled on the sink immediately: a nil logger used to panic there rather than
+// at the call site that forgot to pass one.
+func TestNewLogger_NilLoggerDoesNotPanic(t *testing.T) {
+	NewLogger(nil).V(1).Info("no logger configured")
 }

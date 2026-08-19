@@ -8,6 +8,9 @@ backend:
       cpu: 100m
       memory: 256Mi
   debugEnabled: false
+  # Also gates controller-runtime's own output: the framework logs its
+  # per-instance reconcile lines at V(5), which map to trace here, so raising
+  # this to debug is safe but trace multiplies log volume by the fleet size.
   logLevel: info
   logFormat: json
 

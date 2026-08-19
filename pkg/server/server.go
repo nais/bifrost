@@ -79,12 +79,29 @@ func initKubernetesClient() (ctrl.Client, error) {
 	return kubeClient, nil
 }
 
-func initLogger() *logrus.Logger {
+// initLogger builds the process logger at the configured level. The level is
+// not only bifrost's own verbosity: the controller-runtime sink maps onto it,
+// so running at debug turns the framework's per-reconcile output on for the
+// whole fleet.
+func initLogger(cfg *config.Config) *logrus.Logger {
 	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
 	logger.SetFormatter(&logrus.JSONFormatter{
 		TimestampFormat: "2006-01-02 15:04:05",
 	})
+
+	level := logrus.InfoLevel
+	if cfg.LogLevel != "" {
+		parsed, err := logrus.ParseLevel(cfg.LogLevel)
+		if err != nil {
+			// A typo in the level must not take the process down, but it must
+			// not silently leave it at some other verbosity either.
+			logger.SetLevel(level)
+			logger.WithError(err).Warnf("Invalid BIFROST_LOG_LEVEL %q; falling back to %s", cfg.LogLevel, level)
+			return logger
+		}
+		level = parsed
+	}
+	logger.SetLevel(level)
 
 	return logger
 }
@@ -215,7 +232,7 @@ func validateDefaultReleaseChannel(ctx context.Context, config *config.Config, r
 }
 
 func Run(config *config.Config) {
-	logger := initLogger()
+	logger := initLogger(config)
 
 	// Fail closed on a misconfiguration where auth is enforced but no keys are
 	// set — otherwise every request would be rejected.

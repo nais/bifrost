@@ -182,11 +182,17 @@ type ReconcilerConfig struct {
 }
 
 type Config struct {
-	Meta                MetaConfig
-	Server              ServerConfig
-	Google              GoogleConfig
-	Unleash             UnleashConfig
-	Reconciler          ReconcilerConfig
+	Meta       MetaConfig
+	Server     ServerConfig
+	Google     GoogleConfig
+	Unleash    UnleashConfig
+	Reconciler ReconcilerConfig
+	// LogLevel is the logrus level bifrost logs at. The chart has exposed
+	// backend.logLevel all along but nothing read it: the logger was hardcoded
+	// to debug, which also enabled every controller-runtime verbosity level —
+	// including the per-item V(5) reconcile chatter, two to three JSON lines per
+	// instance per resync.
+	LogLevel            string `env:"BIFROST_LOG_LEVEL,default=info"`
 	DebugMode           bool
 	CloudConnectorProxy string `env:"BIFROST_CLOUD_CONNECTOR_PROXY_IMAGE,default=gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.1.0"`
 }
