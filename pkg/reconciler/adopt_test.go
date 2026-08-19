@@ -1,7 +1,10 @@
 package reconciler
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,9 +15,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // unadopted mirrors what the 65 production instances actually look like: created
@@ -287,5 +294,215 @@ func TestAdoptFleet_TurnsAnInvisibleInstanceIntoAMeasuredOne(t *testing.T) {
 	}
 	if got := allActions(t); got <= beforeAll {
 		t.Error("an adopted instance recorded no reconcile action; adoption did not make it visible")
+	}
+}
+
+// newAdopterWithLog is the same adopter with its log captured, for the cases
+// whose whole point is that something was said out loud.
+func newAdopterWithLog(c client.Client, cfg *config.Config) (*UnleashReconciler, *bytes.Buffer) {
+	logger := logrus.New()
+	buf := &bytes.Buffer{}
+	logger.SetOutput(buf)
+	return NewUnleashReconciler(c, cfg, logger, time.Minute, true), buf
+}
+
+func newFakeClientWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := addSchemeForTest(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithInterceptorFuncs(funcs).Build()
+}
+
+// One instance failing to stamp must not decide the fate of the rest: the sweep
+// is a migration over the whole fleet, and a single conflicting or forbidden
+// patch aborting it would leave every instance after it in list order invisible
+// until the next resync — or forever, if the same one keeps failing. The counter
+// has to tell the two apart too, which it cannot if adoptions are counted before
+// the patch that performs them.
+func TestAdoptFleet_ContinuesPastAFailedStampAndCountsItAsAnError(t *testing.T) {
+	failing := unadopted(t, "team-aaa-fails")
+	healthy := unadopted(t, "team-zzz-ok")
+
+	c := newFakeClientWith(t, interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if obj.GetName() == failing.Name {
+				return errors.New("admission webhook denied the request")
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	}, failing, healthy)
+
+	r := newAdopter(c, testConfig())
+	adoptedBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"})
+	errorsBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "error"})
+
+	r.adoptFleet(context.Background())
+
+	if live := get(t, c, healthy.Namespace, healthy.Name); !kubernetes.IsManagedByBifrost(live) {
+		t.Error("a failed stamp aborted the sweep: the instance after it was never adopted")
+	}
+	if live := get(t, c, failing.Namespace, failing.Name); kubernetes.IsManagedByBifrost(live) {
+		t.Error("the instance whose patch failed came back adopted")
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"}); got != adoptedBefore+1 {
+		t.Errorf(`adoptions_total{result="adopted"} = %v, want %v; a failed stamp must not be counted as one`, got, adoptedBefore+1)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "error"}); got != errorsBefore+1 {
+		t.Errorf(`adoptions_total{result="error"} = %v, want %v`, got, errorsBefore+1)
+	}
+}
+
+// The sweep lists from a cache, so the object it patches is a snapshot that may
+// already be out of date — including in the way that matters: somebody removing
+// the managed-by label to hand the instance to another controller. Without the
+// optimistic lock the patch carries no resourceVersion, lands unconditionally,
+// and puts the label straight back.
+func TestAdopt_RefusesToStampAStaleRead(t *testing.T) {
+	crd := unadopted(t, "team-stale")
+
+	var stale *unleashv1.Unleash
+	c := newFakeClientWith(t, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if stale != nil {
+				list.(*unleashv1.UnleashList).Items = []unleashv1.Unleash{*stale}
+			}
+			return nil
+		},
+	}, crd)
+
+	stale = get(t, c, crd.Namespace, crd.Name)
+
+	// Somebody updates the instance after the sweep's read.
+	current := get(t, c, crd.Namespace, crd.Name)
+	current.SetAnnotations(map[string]string{"someone.else/touched": "yes"})
+	if err := c.Update(context.Background(), current); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	r := newAdopter(c, testConfig())
+	errorsBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "error"})
+
+	r.adoptFleet(context.Background())
+
+	if live := get(t, c, crd.Namespace, crd.Name); kubernetes.IsManagedByBifrost(live) {
+		t.Error("a patch computed from a stale read landed; the stamp must carry the resourceVersion it was computed from")
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "error"}); got != errorsBefore+1 {
+		t.Errorf(`adoptions_total{result="error"} = %v, want %v`, got, errorsBefore+1)
+	}
+}
+
+// A padded namespace passes every "is it set" check and names nothing: the
+// informer cache is keyed on the trimmed name, so a sweep that trimmed it here
+// would adopt instances the census then failed to count forever. Both halves of
+// the sweep go through the same guard, so both refuse.
+func TestFleetSweep_RefusesAWhitespacePaddedNamespace(t *testing.T) {
+	crd := unadopted(t, "team-padded")
+	c := newFakeClient(t, crd)
+
+	cfg := testConfig()
+	cfg.Unleash.InstanceNamespace = " bifrost-unleash "
+	cfg.Reconciler.AutoAdopt = true
+	r := newAdopter(c, cfg)
+
+	adoptedBefore := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"})
+	stampBefore := seriesValue(t, "bifrost_reconciler_instances_updated_timestamp_seconds", nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.runFleetSweep(ctx); err != nil {
+		t.Fatalf("runFleetSweep: %v", err)
+	}
+
+	if live := get(t, c, crd.Namespace, crd.Name); kubernetes.IsManagedByBifrost(live) {
+		t.Error("adopted an instance under a namespace name the guard rejects")
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": "adopted"}); got != adoptedBefore {
+		t.Errorf(`adoptions_total{result="adopted"} = %v, want it unchanged at %v`, got, adoptedBefore)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_instances_updated_timestamp_seconds", nil); got != stampBefore {
+		t.Error("the census ran on a namespace the adopter refused; the two must agree on which namespace they describe")
+	}
+}
+
+// managed-by present but empty names no controller, so it is an exclusion nobody
+// wrote on purpose and nothing else reports: not adopted, therefore never
+// reconciled, and counted as unmanaged for good.
+func TestAdoptFleet_ReportsAnEmptyManagedByLabel(t *testing.T) {
+	crd := unadopted(t, "team-empty-owner")
+	crd.Labels[kubernetes.LabelManagedBy] = ""
+
+	c := newFakeClient(t, crd)
+	r, log := newAdopterWithLog(c, testConfig())
+
+	r.adoptFleet(context.Background())
+
+	if live := get(t, c, crd.Namespace, crd.Name); kubernetes.IsManagedByBifrost(live) {
+		t.Error("an instance claimed by an empty managed-by label was adopted")
+	}
+	if !strings.Contains(log.String(), kubernetes.LabelManagedBy) || !strings.Contains(log.String(), crd.Name) {
+		t.Errorf("an empty %s label excluded %s silently; log was:\n%s", kubernetes.LabelManagedBy, crd.Name, log.String())
+	}
+}
+
+// Only the exact value opts out, so "False" adopts — which is the safe
+// direction, and the opposite of what whoever typed it meant. Saying so is the
+// only thing that separates the two.
+func TestAdoptFleet_ReportsAnUnrecognisedOptOutValue(t *testing.T) {
+	mistyped := unadopted(t, "team-mistyped")
+	mistyped.Labels[kubernetes.LabelAdopt] = "False"
+
+	c := newFakeClient(t, mistyped)
+	r, log := newAdopterWithLog(c, testConfig())
+
+	r.adoptFleet(context.Background())
+
+	if live := get(t, c, mistyped.Namespace, mistyped.Name); !kubernetes.IsManagedByBifrost(live) {
+		t.Errorf("%q was treated as an opt-out; only the exact value %q exempts", "False", kubernetes.AdoptOptOut)
+	}
+	if !strings.Contains(log.String(), kubernetes.LabelAdopt) || !strings.Contains(log.String(), "False") {
+		t.Errorf("an unrecognised opt-out value was ignored silently; log was:\n%s", log.String())
+	}
+}
+
+// The end-to-end case the feature exists for, and the one that used to be
+// destructive: a legacy instance carrying settings the read-back cannot see is
+// adopted, and the very next reconcile — with writes enabled — leaves it exactly
+// as it was, reported as drift rather than converged.
+func TestAdoptThenReconcile_LeavesALegacyInstanceUntouched(t *testing.T) {
+	crd := unadopted(t, "team-legacy")
+	crd.Spec.Size = 3
+	crd.Spec.ExtraEnvVars = append(crd.Spec.ExtraEnvVars, corev1.EnvVar{Name: "HAND_SET", Value: "by-an-operator"})
+	specBefore := crd.Spec.DeepCopy()
+
+	c := newFakeClient(t, crd)
+	logger := logrus.New()
+	logger.SetOutput(nopWriter{})
+	r := NewUnleashReconciler(c, testConfig(), logger, time.Minute, false) // writes enabled
+
+	before := actionCount(t, "would_change", "missing_desired_state")
+
+	r.adoptFleet(context.Background())
+	if _, err := r.Reconcile(context.Background(), requestFor(crd)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	live := get(t, c, crd.Namespace, crd.Name)
+	if live.Spec.Size != 3 {
+		t.Errorf("size = %d, want 3; the reconciler converged an adopted instance to a spec reverse-engineered from itself", live.Spec.Size)
+	}
+	if !equality.Semantic.DeepEqual(*specBefore, live.Spec) {
+		t.Error("adoption plus one reconcile modified the spec of an instance that has no recorded intent")
+	}
+	if got, ok := live.GetAnnotations()[kubernetes.AnnotationDesiredState]; ok {
+		t.Errorf("the reconcile after adoption stamped an intent (%q) derived from a lossy read-back", got)
+	}
+	if got := actionCount(t, "would_change", "missing_desired_state"); got != before+1 {
+		t.Errorf(`bifrost_reconciler_actions_total{action="would_change",reason="missing_desired_state"} = %v, want %v; the drift has to stay visible`, got, before+1)
 	}
 }

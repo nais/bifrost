@@ -33,8 +33,14 @@ const (
 	// mistyped exemption costs a label that can be deleted, whereas
 	// presence-only semantics would make `adopt: "true"` silently mean the
 	// opposite of what it reads as.
+	// Only these two values are recognised. AdoptOptIn is not required to be
+	// adopted — absence is equivalent — but it is the value an operator can
+	// write to say "yes, on purpose", and having it named is what lets the
+	// adopter warn about everything else: "False", "no", "0" and "off" all read
+	// as an exemption and are all silently ignored.
 	LabelAdopt  = "bifrost.nais.io/adopt"
 	AdoptOptOut = "false"
+	AdoptOptIn  = "true"
 )
 
 // IntentSchemaVersion is the schema the desired-state annotation is written

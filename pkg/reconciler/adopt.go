@@ -2,9 +2,11 @@ package reconciler
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
+	"github.com/sirupsen/logrus"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -38,11 +40,12 @@ func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 
 	for i := range list.Items {
 		crd := &list.Items[i]
-		if !adoptable(crd) {
+		log := r.logger.WithField("instance", crd.GetName())
+
+		if !r.adoptable(crd, log) {
 			continue
 		}
 
-		log := r.logger.WithField("instance", crd.GetName())
 		if err := r.adopt(ctx, crd); err != nil {
 			adoptionsTotal.WithLabelValues(adoptionError).Inc()
 			log.WithError(err).Warn("Failed to adopt Unleash instance")
@@ -54,16 +57,33 @@ func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 	}
 }
 
-// adoptable reports whether an instance may be stamped.
-func adoptable(crd *unleashv1.Unleash) bool {
+// adoptable reports whether an instance may be stamped, and says so out loud in
+// the two cases where the answer is not the one the labels look like they mean.
+func (r *UnleashReconciler) adoptable(crd *unleashv1.Unleash, log *logrus.Entry) bool {
 	labels := crd.GetLabels()
 
 	// Never take an object another controller has claimed. managed-by set to
 	// anything but bifrost means it belongs to that controller, and re-pointing
 	// it here would hand one object to two reconcilers. Already-bifrost is a
 	// no-op, so it falls out of the same check.
-	if _, claimed := labels[kubernetes.LabelManagedBy]; claimed {
+	if owner, claimed := labels[kubernetes.LabelManagedBy]; claimed {
+		// Present-but-empty names no controller, so it is a claim nobody can
+		// act on: never adopted, never reconciled, counted as unmanaged for
+		// good. Every other exclusion here is either visible in the label or
+		// deliberate; this one reads as a typo and behaves as a permanent
+		// exemption, so it is the one that has to be said out loud.
+		if strings.TrimSpace(owner) == "" {
+			log.Warnf("Instance has an empty %s label, which excludes it from adoption and from the reconciler forever; remove the label to make it adoptable", kubernetes.LabelManagedBy)
+		}
 		return false
+	}
+
+	// Fail toward being visible: only the exact opt-out value exempts, so an
+	// unrecognised one is adopted. That is the safe direction — adoption adds a
+	// label and is undone by removing it — but it means a mistyped "False"
+	// silently does the opposite of what its author intended.
+	if value, ok := labels[kubernetes.LabelAdopt]; ok && value != kubernetes.AdoptOptOut && value != kubernetes.AdoptOptIn {
+		log.Warnf("Instance has %s=%q, which is not a recognised value; only the exact value %q opts out of adoption", kubernetes.LabelAdopt, value, kubernetes.AdoptOptOut)
 	}
 
 	return labels[kubernetes.LabelAdopt] != kubernetes.AdoptOptOut
