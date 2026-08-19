@@ -11,6 +11,7 @@ const (
 	actionChanged     = "changed"      // a converging patch was applied
 	actionError       = "error"        // the patch failed
 	actionIntentError = "intent_error" // the desired-state intent could not be resolved; instance skipped
+	actionSkipped     = "skipped"      // the instance is not bifrost-managed; nothing was done
 )
 
 // Why an instance is not in sync. Without this, would_change says how many
@@ -34,9 +35,9 @@ var reconcilerActionsTotal = prometheus.NewCounterVec(
 )
 
 // managedInstances is the denominator the action counters are missing: an
-// instance whose intent stops resolving, or that loses its managed-by label,
-// silently drops out of the reconciled set, and nothing in a rate() of the
-// action counters shows the fleet shrinking.
+// instance whose intent stops resolving silently drops out of the reconciled
+// set, and nothing in a rate() of the action counters shows the fleet
+// shrinking.
 var managedInstances = prometheus.NewGauge(
 	prometheus.GaugeOpts{
 		Name: "bifrost_reconciler_managed_instances",
@@ -44,8 +45,50 @@ var managedInstances = prometheus.NewGauge(
 	},
 )
 
+// unmanagedInstances is the other half of that denominator. Counting only
+// managed instances cannot see the case the pair exists for: an instance that
+// loses its managed-by label leaves numerator and denominator at once, so the
+// managed gauge just steps down by one and looks like a deletion. Reported as a
+// second gauge rather than a managed="true|false" label on the first, because
+// bifrost_reconciler_managed_instances is already exported (the reconciler need
+// not be enabled for that — see the timestamp below), and adding a label to a
+// live series silently breaks every query that selects it by name alone.
+var unmanagedInstances = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "bifrost_reconciler_unmanaged_instances",
+		Help: "Unleash instances in bifrost's namespace without the managed-by label, which the reconciler ignores.",
+	},
+)
+
+// instancesUpdatedTimestamp separates "never measured" from "measured, and the
+// fleet is empty". Both gauges are registered in init, which runs in every
+// bifrost process because package server imports this package — so they read 0
+// from process start, and the chart ships reconciler.enabled=false. Without
+// this timestamp the dark-launch step "turn the reconciler on and expect
+// managed_instances = 0" cannot answer its own question, because 0 is also what
+// a bifrost with no reconciler at all publishes.
+//
+// A timestamp is preferred over registering the gauges on first success: it is
+// scraped as an ordinary series, and it additionally makes a stalled census
+// alertable (time() - ..._updated_timestamp_seconds > a few resync intervals),
+// which is exactly the failure mode the "a failed List keeps the previous
+// value" behaviour would otherwise hide.
+//
+// Note for >1 replica: the census runnable is added to the manager's
+// LeaderElection group, so non-leaders would publish a permanent 0 with a
+// permanent 0 timestamp next to the leader's real values. The chart pins
+// replicas: 1, so this is recorded rather than solved; the fix, if replicas
+// grow, is to select on the leader (e.g. via the leader-election lease) rather
+// than to aggregate.
+var instancesUpdatedTimestamp = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "bifrost_reconciler_instances_updated_timestamp_seconds",
+		Help: "Unix time of the last successful instance census; 0 means no census has completed.",
+	},
+)
+
 func init() {
-	prometheus.MustRegister(reconcilerActionsTotal, managedInstances)
+	prometheus.MustRegister(reconcilerActionsTotal, managedInstances, unmanagedInstances, instancesUpdatedTimestamp)
 }
 
 // recordAction increments the action counter. Every call site must pass a

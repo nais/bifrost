@@ -64,7 +64,12 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Only touch instances bifrost owns; never a hand-authored or foreign CR.
+	// Counted, because this is not only the foreign-CR case: the watch predicate
+	// filters on the label but a RequeueAfter does not, so an instance that
+	// loses the label after having been reconciled comes back here exactly once
+	// and then falls out of the reconciled set for good.
 	if !kubernetes.IsManagedByBifrost(crd) {
+		recordAction(actionSkipped, reasonMissingLabel)
 		return ctrl.Result{}, nil
 	}
 
@@ -238,11 +243,11 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err != nil {
 		return err
 	}
-	// The gauge is refreshed on a timer rather than per Reconcile. The List is
+	// The gauges are refreshed on a timer rather than per Reconcile. The List is
 	// served from the manager's cache, but running it per instance per resync
 	// makes the work quadratic in fleet size for a number that only has to be
 	// accurate enough to compare against the action counters.
-	if err := mgr.Add(manager.RunnableFunc(r.reportManagedInstances)); err != nil {
+	if err := mgr.Add(manager.RunnableFunc(r.reportInstanceCounts)); err != nil {
 		return err
 	}
 
@@ -252,15 +257,15 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// reportManagedInstances keeps the managed_instances gauge current until the
-// manager stops. Added as a plain Runnable, so with leader election on only the
-// leader reports — matching the action counters, which only advance there.
-func (r *UnleashReconciler) reportManagedInstances(ctx context.Context) error {
+// reportInstanceCounts keeps the fleet gauges current until the manager stops.
+// Added as a plain Runnable, so with leader election on only the leader reports
+// — matching the action counters, which only advance there.
+func (r *UnleashReconciler) reportInstanceCounts(ctx context.Context) error {
 	ticker := time.NewTicker(r.resync)
 	defer ticker.Stop()
 
 	for {
-		r.countManagedInstances(ctx)
+		r.countInstances(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -269,14 +274,30 @@ func (r *UnleashReconciler) reportManagedInstances(ctx context.Context) error {
 	}
 }
 
-// countManagedInstances sets the gauge from a label-selected List. A failure is
-// logged and the previous value left in place: a zero would read as "the fleet
-// disappeared", which is the alert this gauge exists to make trustworthy.
-func (r *UnleashReconciler) countManagedInstances(ctx context.Context) {
+// countInstances sets the fleet gauges from a List of the whole namespace and
+// partitions the result itself. Listing with a managed-by selector instead —
+// which is what this did — cannot observe an instance losing the label, because
+// that removes it from the count and from the reconciled set in the same step:
+// the gauge steps down by one and is indistinguishable from a deletion.
+//
+// A failure is logged and the previous values left in place: a zero would read
+// as "the fleet disappeared". The timestamp is deliberately not advanced, so a
+// census that keeps failing is visible as a stale one rather than as a plausible
+// steady state.
+func (r *UnleashReconciler) countInstances(ctx context.Context) {
 	list := &unleashv1.UnleashList{}
-	if err := r.client.List(ctx, list, client.MatchingLabels{kubernetes.LabelManagedBy: kubernetes.ManagedByBifrost}); err != nil {
-		r.logger.WithError(err).Warn("Failed to count bifrost-managed Unleash instances")
+	if err := r.client.List(ctx, list, client.InNamespace(r.config.Unleash.InstanceNamespace)); err != nil {
+		r.logger.WithError(err).Warn("Failed to count Unleash instances")
 		return
 	}
-	managedInstances.Set(float64(len(list.Items)))
+
+	var managed float64
+	for i := range list.Items {
+		if kubernetes.IsManagedByBifrost(&list.Items[i]) {
+			managed++
+		}
+	}
+	managedInstances.Set(managed)
+	unmanagedInstances.Set(float64(len(list.Items)) - managed)
+	instancesUpdatedTimestamp.SetToCurrentTime()
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,10 +40,14 @@ func testConfig() *config.Config {
 	}
 }
 
+func addSchemeForTest(scheme *runtime.Scheme) error {
+	return unleashv1.AddToScheme(scheme)
+}
+
 func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := unleashv1.AddToScheme(scheme); err != nil {
+	if err := addSchemeForTest(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
@@ -118,6 +121,11 @@ func TestReconcile_IgnoresUnmanaged(t *testing.T) {
 	c := newFakeClient(t, foreign)
 	r := newReconciler(c)
 
+	// An instance that loses the label is not merely skipped, it drops out of
+	// the reconciled set: the watch predicate stops matching it and no action
+	// counter ever moves for it again. That exit has to be visible.
+	skippedBefore := actionCount(t, "skipped", "missing_managed_label")
+
 	if _, err := r.Reconcile(context.Background(), requestFor(foreign)); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -128,6 +136,9 @@ func TestReconcile_IgnoresUnmanaged(t *testing.T) {
 	}
 	if got.Spec.ApiIngress.Class != "hand-authored" {
 		t.Errorf("unmanaged instance was modified: class = %q", got.Spec.ApiIngress.Class)
+	}
+	if got := actionCount(t, "skipped", "missing_managed_label"); got != skippedBefore+1 {
+		t.Errorf(`bifrost_reconciler_actions_total{action="skipped",reason="missing_managed_label"} = %v, want %v`, got, skippedBefore+1)
 	}
 }
 
@@ -170,7 +181,7 @@ func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: drifted.Namespace, Name: "team-d"}, before); err != nil {
 		t.Fatalf("get before: %v", err)
 	}
-	wouldChangeBefore := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange, reasonSpecMismatch))
+	wouldChangeBefore := actionCount(t, "would_change", "spec_mismatch")
 
 	if _, err := r.Reconcile(context.Background(), requestFor(drifted)); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -186,8 +197,8 @@ func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
 	if after.Spec.ApiIngress.Class != "DRIFTED" {
 		t.Errorf("dry-run changed the object: class = %q", after.Spec.ApiIngress.Class)
 	}
-	if got := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange, reasonSpecMismatch)); got != wouldChangeBefore+1 {
-		t.Errorf("would_change counter = %v, want %v", got, wouldChangeBefore+1)
+	if got := actionCount(t, "would_change", "spec_mismatch"); got != wouldChangeBefore+1 {
+		t.Errorf(`bifrost_reconciler_actions_total{action="would_change",reason="spec_mismatch"} = %v, want %v`, got, wouldChangeBefore+1)
 	}
 }
 
@@ -244,7 +255,7 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 	logger.SetOutput(io.Discard)
 	r := NewUnleashReconciler(c, cfg, logger, time.Minute, false)
 
-	before := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync, reasonNone))
+	before := actionCount(t, "in_sync", "none")
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "team-a", Namespace: cfg.Unleash.InstanceNamespace},
@@ -252,7 +263,7 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	after := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync, reasonNone))
+	after := actionCount(t, "in_sync", "none")
 	if after != before+1 {
 		t.Fatalf("a freshly created instance must reconcile as in_sync; in_sync counter went %v → %v", before, after)
 	}
@@ -331,7 +342,10 @@ func TestResolveIntent_AcceptsValidAnnotation(t *testing.T) {
 }
 
 // The whole point of the reason label: a would_change reading has to be
-// attributable to a cause without re-rendering the instance by hand.
+// attributable to a cause without re-rendering the instance by hand. The
+// expected reasons are the exposed label strings rather than the constants,
+// because comparing the constants against themselves would accept any renaming
+// of them, the empty string included.
 func TestInSync_ReportsDriftCause(t *testing.T) {
 	desired := renderManaged(t, "team-e")
 
@@ -346,12 +360,12 @@ func TestInSync_ReportsDriftCause(t *testing.T) {
 			name:   "identical",
 			mutate: func(*unleashv1.Unleash) {},
 			inSync: true,
-			reason: reasonNone,
+			reason: "none",
 		},
 		{
 			name:     "spec drift",
 			mutate:   func(u *unleashv1.Unleash) { u.Spec.Size = 3 },
-			reason:   reasonSpecMismatch,
+			reason:   "spec_mismatch",
 			sections: []string{"Size"},
 		},
 		{
@@ -361,18 +375,38 @@ func TestInSync_ReportsDriftCause(t *testing.T) {
 				u.Spec.ApiIngress.Class = "DRIFTED"
 				u.Spec.Federation.SecretNonce = "rotated"
 			},
-			reason:   reasonSpecMismatch,
+			reason:   "spec_mismatch",
 			sections: []string{"Size", "ApiIngress", "Federation"},
 		},
 		{
 			name:   "managed-by label removed",
 			mutate: func(u *unleashv1.Unleash) { delete(u.Labels, kubernetes.LabelManagedBy) },
-			reason: reasonMissingLabel,
+			reason: "missing_managed_label",
 		},
 		{
 			name:   "desired-state annotation not yet stamped",
 			mutate: func(u *unleashv1.Unleash) { delete(u.Annotations, kubernetes.AnnotationDesiredState) },
-			reason: reasonIntentMismatch,
+			reason: "desired_state_mismatch",
+		},
+		// The checks are documented as ordered most to least significant, and
+		// only a case with two causes at once can pin that: with one cause per
+		// case the order is unobservable and could be swapped freely.
+		{
+			name: "spec drift outranks a missing label",
+			mutate: func(u *unleashv1.Unleash) {
+				u.Spec.Size = 3
+				delete(u.Labels, kubernetes.LabelManagedBy)
+			},
+			reason:   "spec_mismatch",
+			sections: []string{"Size"},
+		},
+		{
+			name: "a missing label outranks a stale annotation",
+			mutate: func(u *unleashv1.Unleash) {
+				delete(u.Labels, kubernetes.LabelManagedBy)
+				u.Annotations[kubernetes.AnnotationDesiredState] = `{"Name":"someone-else"}`
+			},
+			reason: "missing_managed_label",
 		},
 	}
 
@@ -405,7 +439,7 @@ func TestReconcile_CountsUnresolvableIntent(t *testing.T) {
 	c := newFakeClient(t, broken)
 	r := newReconciler(c)
 
-	before := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionIntentError, reasonNone))
+	before := actionCount(t, "intent_error", "none")
 
 	res, err := r.Reconcile(context.Background(), requestFor(broken))
 	if err != nil {
@@ -414,8 +448,8 @@ func TestReconcile_CountsUnresolvableIntent(t *testing.T) {
 	if res.RequeueAfter != time.Minute {
 		t.Errorf("RequeueAfter = %v, want the resync interval", res.RequeueAfter)
 	}
-	if got := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionIntentError, reasonNone)); got != before+1 {
-		t.Errorf("intent_error counter = %v, want %v", got, before+1)
+	if got := actionCount(t, "intent_error", "none"); got != before+1 {
+		t.Errorf(`bifrost_reconciler_actions_total{action="intent_error",reason="none"} = %v, want %v`, got, before+1)
 	}
 
 	live := &unleashv1.Unleash{}
@@ -424,23 +458,5 @@ func TestReconcile_CountsUnresolvableIntent(t *testing.T) {
 	}
 	if live.ResourceVersion != broken.ResourceVersion {
 		t.Errorf("an unresolvable intent must not write (RV %s -> %s)", broken.ResourceVersion, live.ResourceVersion)
-	}
-}
-
-// The gauge is the denominator for the action counters, so it must count
-// bifrost-managed instances only.
-func TestCountManagedInstances_CountsOnlyManaged(t *testing.T) {
-	managedA := renderManaged(t, "team-g")
-	managedB := renderManaged(t, "team-h")
-	foreign := renderManaged(t, "team-i")
-	delete(foreign.Labels, kubernetes.LabelManagedBy)
-
-	c := newFakeClient(t, &managedA, &managedB, &foreign)
-	r := newReconciler(c)
-
-	r.countManagedInstances(context.Background())
-
-	if got := testutil.ToFloat64(managedInstances); got != 2 {
-		t.Errorf("managed_instances = %v, want 2", got)
 	}
 }
