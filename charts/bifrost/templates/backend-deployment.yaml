@@ -6,6 +6,19 @@ metadata:
     {{- include "bifrost.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # Recreate, not the default RollingUpdate. With no strategy set, maxSurge
+  # rounds up to 1 and every deploy overlaps two pods — each running a
+  # reconcile loop, with leader election off. In steady state that is merely
+  # noisy: both render the same spec, so the loser of the race takes a 409 from
+  # the optimistic lock and increments the error counter the rollout is meant to
+  # be reading. But when the deploy itself carries a global-config change, the
+  # two pods render *different* desired specs, each patch requeues the instance
+  # on the other pod through its watch, and instances flip-flop at API latency
+  # for the whole overlap — with unleasherator redeploying the workload on each
+  # flip. The cost of Recreate is a few seconds of API downtime per deploy, and
+  # bifrost's only caller is nais-api, which retries.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "bifrost.selectorLabels" . | nindent 6 }}
