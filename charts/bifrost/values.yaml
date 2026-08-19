@@ -38,6 +38,15 @@ backend:
     # writing by accident. Turning dry-run off is the deliberate second
     # step, after the would_change counter has been read.
     dryRun: true
+    # Stamp app.kubernetes.io/managed-by=bifrost on unlabelled Unleash
+    # instances in the instance namespace, so a fleet created before the label
+    # existed becomes visible to the reconciler in one observable event
+    # (bifrost_reconciler_adoptions_total) instead of one user PUT at a time.
+    # Deliberately independent of dryRun: the intended order is enabled +
+    # dryRun + autoAdopt, i.e. make the fleet visible, read the drift, then
+    # converge. Never writes the desired-state annotation, and an instance
+    # labelled bifrost.nais.io/adopt=false is left alone.
+    autoAdopt: false
     resyncInterval: "10m"
 
   unleash:

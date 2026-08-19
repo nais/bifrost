@@ -135,6 +135,8 @@ spec:
               value: {{ .Values.backend.reconciler.enabled | quote }}
             - name: BIFROST_RECONCILER_DRY_RUN
               value: {{ .Values.backend.reconciler.dryRun | quote }}
+            - name: BIFROST_RECONCILER_AUTO_ADOPT
+              value: {{ .Values.backend.reconciler.autoAdopt | quote }}
             - name: BIFROST_RECONCILER_RESYNC_INTERVAL
               value: {{ .Values.backend.reconciler.resyncInterval | quote }}
           ports:

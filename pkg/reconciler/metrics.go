@@ -87,8 +87,31 @@ var instancesUpdatedTimestamp = prometheus.NewGauge(
 	},
 )
 
+// Adoption outcomes. Kept off reconcilerActionsTotal deliberately: that counter
+// means "a reconcile happened and here is what it did", and adoption is not a
+// reconcile — it is the metadata write that lets one happen at all. Mixing them
+// would make sum(rate(actions_total)) stop meaning reconciles, and would put a
+// one-off migration spike inside the series the dark launch is read from.
+const (
+	adoptionAdopted = "adopted" // the managed-by label was stamped
+	adoptionError   = "error"   // the stamping patch failed
+)
+
+// adoptionsTotal makes "65 instances were adopted" an event that was observed
+// rather than one inferred afterwards from unmanagedInstances falling as
+// managedInstances rises. It is also what tells the two apart during a
+// migration: instances left unmanaged after a sweep are opted out or failed to
+// stamp, and only the error series says which.
+var adoptionsTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "bifrost_reconciler_adoptions_total",
+		Help: "Unleash instances stamped with the bifrost managed-by label by the fleet adopter.",
+	},
+	[]string{"result"},
+)
+
 func init() {
-	prometheus.MustRegister(reconcilerActionsTotal, managedInstances, unmanagedInstances, instancesUpdatedTimestamp)
+	prometheus.MustRegister(reconcilerActionsTotal, managedInstances, unmanagedInstances, instancesUpdatedTimestamp, adoptionsTotal)
 }
 
 // recordAction increments the action counter. Every call site must pass a

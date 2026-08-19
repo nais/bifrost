@@ -243,11 +243,12 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err != nil {
 		return err
 	}
-	// The gauges are refreshed on a timer rather than per Reconcile. The List is
-	// served from the manager's cache, but running it per instance per resync
-	// makes the work quadratic in fleet size for a number that only has to be
-	// accurate enough to compare against the action counters.
-	if err := mgr.Add(manager.RunnableFunc(r.reportInstanceCounts)); err != nil {
+	// The fleet-wide work — adoption and the census behind the gauges — runs on
+	// a timer rather than per Reconcile. The List is served from the manager's
+	// cache, but running it per instance per resync makes the work quadratic in
+	// fleet size for numbers that only have to be accurate enough to compare
+	// against the action counters.
+	if err := mgr.Add(manager.RunnableFunc(r.runFleetSweep)); err != nil {
 		return err
 	}
 
@@ -257,14 +258,31 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// reportInstanceCounts keeps the fleet gauges current until the manager stops.
-// Added as a plain Runnable, so with leader election on only the leader reports
-// — matching the action counters, which only advance there.
-func (r *UnleashReconciler) reportInstanceCounts(ctx context.Context) error {
+// runFleetSweep adopts unlabelled instances and keeps the fleet gauges current
+// until the manager stops. Added as a plain Runnable, so with leader election on
+// only the leader sweeps — matching the action counters, which only advance
+// there.
+//
+// Adoption and the census share one runnable, in that order, so every census
+// reports the fleet as the sweep just left it. That ordering is what makes
+// unmanaged_instances readable during a migration: once adoption has run,
+// whatever is still unmanaged is opted out or failed to stamp — not merely
+// not-yet-visited — and the step in the gauges lines up with the adoptions
+// counted in the same pass. On separate timers a census could land mid-sweep
+// and publish, and timestamp, a split that says neither.
+//
+// The per-instance side needs no such ordering: stamping a label is idempotent
+// and immediately queues that one instance through the watch, so a partial
+// sweep just means fewer instances are visible yet, never a wrong number for
+// the ones that are.
+func (r *UnleashReconciler) runFleetSweep(ctx context.Context) error {
 	ticker := time.NewTicker(r.resync)
 	defer ticker.Stop()
 
 	for {
+		if r.config.Reconciler.AutoAdopt {
+			r.adoptFleet(ctx)
+		}
 		r.countInstances(ctx)
 		select {
 		case <-ctx.Done():

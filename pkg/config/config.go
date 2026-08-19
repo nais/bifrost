@@ -170,6 +170,18 @@ type ReconcilerConfig struct {
 	// would change but never writes. This is the dark-launch step — enable the
 	// reconciler with DryRun on, confirm the blast radius, then set it false.
 	DryRun bool `env:"BIFROST_RECONCILER_DRY_RUN,default=false"`
+	// AutoAdopt makes the reconciler stamp the managed-by label on unlabelled
+	// Unleash instances in its own namespace, so a fleet created before the
+	// label existed becomes visible in one observable event instead of being
+	// adopted one user PUT at a time over months.
+	//
+	// It is a separate switch from Enabled and orthogonal to DryRun on purpose:
+	// adoption writes, but only metadata, and the intended rollout is
+	// Enabled+DryRun+AutoAdopt — measure the fleet before converging it. Folding
+	// it into DryRun would make "observe only, no writes" untrue; folding it
+	// into Enabled would make it impossible to turn off once the fleet is
+	// adopted, which it should be, since the sweep is then pure cost.
+	AutoAdopt bool `env:"BIFROST_RECONCILER_AUTO_ADOPT,default=false"`
 	// ResyncInterval is how often every managed instance is re-rendered even
 	// without a CR event, so global-config changes propagate and drift heals.
 	ResyncInterval time.Duration `env:"BIFROST_RECONCILER_RESYNC_INTERVAL,default=10m"`

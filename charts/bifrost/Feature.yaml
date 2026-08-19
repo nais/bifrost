@@ -38,6 +38,11 @@ values:
     displayName: Reconciler dry-run (observe only, no writes)
     config:
       type: bool
+  backend.reconciler.autoAdopt:
+    displayName: Adopt unlabelled Unleash instances in bifrost's namespace
+    description: Stamps only the managed-by label, never the desired-state annotation, so instances created before the label become visible to the reconciler. Turn on together with dry-run to measure the fleet before converging it.
+    config:
+      type: bool
 
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class

@@ -21,6 +21,20 @@ const (
 	// re-renders from — unlike reverse-engineering the rendered spec via
 	// LoadConfigFromCRD, which drops fields.
 	AnnotationDesiredState = "bifrost.nais.io/desired-state"
+
+	// LabelAdopt opts an instance out of automatic adoption. It is a label
+	// rather than an annotation because the adopter's own List is label-scoped
+	// and because `kubectl get unleash -l bifrost.nais.io/adopt=false` is then
+	// the exemption list.
+	//
+	// Only the exact value AdoptOptOut exempts an instance; absence, an empty
+	// value, or anything unrecognised leaves it eligible. That direction is
+	// deliberate: adoption only adds a label and is undone by removing it, so a
+	// mistyped exemption costs a label that can be deleted, whereas
+	// presence-only semantics would make `adopt: "true"` silently mean the
+	// opposite of what it reads as.
+	LabelAdopt  = "bifrost.nais.io/adopt"
+	AdoptOptOut = "false"
 )
 
 // IntentSchemaVersion is the schema the desired-state annotation is written
