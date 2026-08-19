@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
@@ -15,29 +16,77 @@ const (
 	ManagedByBifrost = "bifrost"
 
 	// AnnotationDesiredState carries the bifrost per-instance intent (the
-	// unleash.Config) as JSON. It is the authoritative, non-lossy source of
-	// truth the reconciler re-renders from — unlike reverse-engineering the
-	// rendered spec via LoadConfigFromCRD, which drops fields.
+	// unleash.Config) as JSON, alongside the schemaVersion it was written
+	// under. It is the authoritative, non-lossy source of truth the reconciler
+	// re-renders from — unlike reverse-engineering the rendered spec via
+	// LoadConfigFromCRD, which drops fields.
 	AnnotationDesiredState = "bifrost.nais.io/desired-state"
 )
 
-// MarshalIntent serializes a per-instance config for storage in the
-// desired-state annotation.
+// IntentSchemaVersion is the schema the desired-state annotation is written
+// under, and the only one this build will read back.
+//
+// UnmarshalIntent is a plain json.Unmarshal, which is silent in both
+// directions: a field added to unleash.Config since an annotation was written
+// comes back as its zero value, and a renamed one is dropped as unknown and
+// zero-filled as missing. Because the annotation is authoritative, the
+// reconciler would then render those zero values onto every live instance still
+// carrying an old annotation — a fleet-wide rewrite that looks exactly like an
+// ordinary converge. The version turns that into a refusal.
+//
+// Bump it in the same commit as any change to unleash.Config's fields — add,
+// remove, rename, or retype. TestIntentSchemaVersionPinsConfigFields fails
+// until you do.
+const IntentSchemaVersion = 1
+
+// intentEnvelope is the on-annotation shape: the config's own fields with the
+// schema version alongside them. Config is embedded rather than nested so the
+// payload stays byte-for-byte what pre-versioning bifrost wrote, with the
+// schemaVersion key as the only addition.
+type intentEnvelope struct {
+	SchemaVersion int `json:"schemaVersion"`
+	unleash.Config
+}
+
+// MarshalIntent serializes a per-instance config, stamped with the current
+// schema version, for storage in the desired-state annotation.
 func MarshalIntent(cfg *unleash.Config) (string, error) {
-	b, err := json.Marshal(cfg)
+	b, err := json.Marshal(intentEnvelope{SchemaVersion: IntentSchemaVersion, Config: *cfg})
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
 }
 
-// UnmarshalIntent parses the desired-state annotation back into a config.
+// UnmarshalIntent parses the desired-state annotation back into a config, and
+// refuses one written under a schema this build does not know how to read.
+//
+// Refusing is the point: the caller treats the error like malformed JSON and
+// skips the instance, which leaves it as it is. Reading it anyway would render
+// a partially zero-filled config onto a running instance, and #581's validation
+// only catches the degenerate cases — a config zero-filled in one field still
+// validates and would be applied verbatim.
 func UnmarshalIntent(s string) (*unleash.Config, error) {
-	cfg := &unleash.Config{}
-	if err := json.Unmarshal([]byte(s), cfg); err != nil {
+	envelope := intentEnvelope{}
+	if err := json.Unmarshal([]byte(s), &envelope); err != nil {
 		return nil, err
 	}
-	return cfg, nil
+
+	version := envelope.SchemaVersion
+	if version == 0 {
+		// Written before the version field existed. Those annotations are
+		// field-for-field what version 1 writes, so reading them as 1 is exact
+		// rather than a guess — and it is deliberately not a blanket exemption:
+		// once the schema moves past 1 they are refused along with every other
+		// version-1 annotation.
+		version = 1
+	}
+	if version != IntentSchemaVersion {
+		return nil, fmt.Errorf("desired-state annotation has schema version %d, this build reads %d", version, IntentSchemaVersion)
+	}
+
+	cfg := envelope.Config
+	return &cfg, nil
 }
 
 // IsManagedByBifrost reports whether the reconciler owns this instance.
