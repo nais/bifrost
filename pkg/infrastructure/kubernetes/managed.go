@@ -94,6 +94,32 @@ func IsManagedByBifrost(crd *unleashv1.Unleash) bool {
 	return crd.GetLabels()[LabelManagedBy] == ManagedByBifrost
 }
 
+// ApplyManagedMetadata copies bifrost's managed-by label and desired-state
+// annotation from a rendered CRD onto a live one, leaving every other metadata
+// field alone — finalizers, ownerReferences, and labels and annotations set by
+// anyone else.
+//
+// This is the ownership rule for metadata on an Unleash CR: bifrost owns these
+// two keys and nothing else. Both write paths into the object have to agree on
+// it, or the outcome depends on which one wrote last — the reconciler's
+// applyManagedMetadata has the same semantics, and the repository's Update
+// reaches it through here.
+func ApplyManagedMetadata(live, rendered *unleashv1.Unleash) {
+	if live.Labels == nil {
+		live.Labels = map[string]string{}
+	}
+	live.Labels[LabelManagedBy] = ManagedByBifrost
+
+	// Absent only when marshaling the intent failed; keeping whatever the live
+	// object already carries beats replacing it with nothing.
+	if intent := rendered.GetAnnotations()[AnnotationDesiredState]; intent != "" {
+		if live.Annotations == nil {
+			live.Annotations = map[string]string{}
+		}
+		live.Annotations[AnnotationDesiredState] = intent
+	}
+}
+
 // stampManagedMetadata sets the managed-by label and desired-state annotation on
 // a rendered CRD so every create/update marks the instance as bifrost-managed
 // and records the intent it was rendered from.
