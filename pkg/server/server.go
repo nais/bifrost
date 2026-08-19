@@ -22,7 +22,6 @@ import (
 	"github.com/nais/bifrost/pkg/reconciler"
 	fqdnV1alpha3 "github.com/nais/fqdn-policy/api/v1alpha3"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	admin "google.golang.org/api/sqladmin/v1beta4"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -165,8 +164,8 @@ func setupRouter(config *config.Config, logger *logrus.Logger, v1Service *unleas
 	// bifrost_api_auth_requests_total{outcome=...}, and the reconciler watches
 	// bifrost_reconciler_actions_total. Both register on the prometheus default
 	// registry, and controller-runtime's own metrics server is disabled to avoid
-	// a second listener, so this route is the only way either is scrapeable.
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	// a second listener, so this route is the only way any of it is scrapeable.
+	router.GET("/metrics", gin.WrapH(metricsHandler()))
 
 	// Serve OpenAPI specification (JSON format from embedded spec)
 	router.GET("/openapi.json", func(c *gin.Context) {

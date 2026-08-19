@@ -27,7 +27,8 @@ backend:
 
   # Reconcile loop that converges managed Unleash instances to their desired
   # config. Dark-launched: enable with dryRun=true first, watch
-  # bifrost_reconciler_actions_total{action="would_change"}, then set dryRun=false.
+  # bifrost_reconciler_actions_total{action="would_change"} — the reason label
+  # says whether that is spec drift or metadata backfill — then set dryRun=false.
   reconciler:
     enabled: false
     # Defaults to observe-only, so enabling the reconciler cannot start

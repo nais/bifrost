@@ -14,6 +14,7 @@ import (
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -169,7 +170,7 @@ func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: drifted.Namespace, Name: "team-d"}, before); err != nil {
 		t.Fatalf("get before: %v", err)
 	}
-	wouldChangeBefore := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange))
+	wouldChangeBefore := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange, reasonSpecMismatch))
 
 	if _, err := r.Reconcile(context.Background(), requestFor(drifted)); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -185,7 +186,7 @@ func TestReconcile_DryRunObservesWithoutWriting(t *testing.T) {
 	if after.Spec.ApiIngress.Class != "DRIFTED" {
 		t.Errorf("dry-run changed the object: class = %q", after.Spec.ApiIngress.Class)
 	}
-	if got := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange)); got != wouldChangeBefore+1 {
+	if got := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionWouldChange, reasonSpecMismatch)); got != wouldChangeBefore+1 {
 		t.Errorf("would_change counter = %v, want %v", got, wouldChangeBefore+1)
 	}
 }
@@ -243,7 +244,7 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 	logger.SetOutput(io.Discard)
 	r := NewUnleashReconciler(c, cfg, logger, time.Minute, false)
 
-	before := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync))
+	before := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync, reasonNone))
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "team-a", Namespace: cfg.Unleash.InstanceNamespace},
@@ -251,7 +252,7 @@ func TestReconcile_FreshlyCreatedInstanceIsAFixedPoint(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	after := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync))
+	after := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionInSync, reasonNone))
 	if after != before+1 {
 		t.Fatalf("a freshly created instance must reconcile as in_sync; in_sync counter went %v → %v", before, after)
 	}
@@ -326,5 +327,120 @@ func TestResolveIntent_AcceptsValidAnnotation(t *testing.T) {
 	}
 	if got.Name != "team-a" {
 		t.Fatalf("Name = %q, want team-a", got.Name)
+	}
+}
+
+// The whole point of the reason label: a would_change reading has to be
+// attributable to a cause without re-rendering the instance by hand.
+func TestInSync_ReportsDriftCause(t *testing.T) {
+	desired := renderManaged(t, "team-e")
+
+	cases := []struct {
+		name     string
+		mutate   func(*unleashv1.Unleash)
+		inSync   bool
+		reason   string
+		sections []string
+	}{
+		{
+			name:   "identical",
+			mutate: func(*unleashv1.Unleash) {},
+			inSync: true,
+			reason: reasonNone,
+		},
+		{
+			name:     "spec drift",
+			mutate:   func(u *unleashv1.Unleash) { u.Spec.Size = 3 },
+			reason:   reasonSpecMismatch,
+			sections: []string{"Size"},
+		},
+		{
+			name: "drift in several sections",
+			mutate: func(u *unleashv1.Unleash) {
+				u.Spec.Size = 3
+				u.Spec.ApiIngress.Class = "DRIFTED"
+				u.Spec.Federation.SecretNonce = "rotated"
+			},
+			reason:   reasonSpecMismatch,
+			sections: []string{"Size", "ApiIngress", "Federation"},
+		},
+		{
+			name:   "managed-by label removed",
+			mutate: func(u *unleashv1.Unleash) { delete(u.Labels, kubernetes.LabelManagedBy) },
+			reason: reasonMissingLabel,
+		},
+		{
+			name:   "desired-state annotation not yet stamped",
+			mutate: func(u *unleashv1.Unleash) { delete(u.Annotations, kubernetes.AnnotationDesiredState) },
+			reason: reasonIntentMismatch,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			live := desired.DeepCopy()
+			tc.mutate(live)
+
+			got := newReconciler(newFakeClient(t)).inSync(live, &desired)
+			if got.inSync != tc.inSync {
+				t.Errorf("inSync = %v, want %v", got.inSync, tc.inSync)
+			}
+			if got.reason != tc.reason {
+				t.Errorf("reason = %q, want %q", got.reason, tc.reason)
+			}
+			if !equality.Semantic.DeepEqual(got.sections, tc.sections) {
+				t.Errorf("sections = %v, want %v", got.sections, tc.sections)
+			}
+		})
+	}
+}
+
+// An instance whose intent cannot be resolved drops out of the managed set. It
+// must appear in a metric, not only in a log line.
+func TestReconcile_CountsUnresolvableIntent(t *testing.T) {
+	desired := renderManaged(t, "team-f")
+	broken := desired.DeepCopy()
+	broken.Annotations[kubernetes.AnnotationDesiredState] = "{not json"
+
+	c := newFakeClient(t, broken)
+	r := newReconciler(c)
+
+	before := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionIntentError, reasonNone))
+
+	res, err := r.Reconcile(context.Background(), requestFor(broken))
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != time.Minute {
+		t.Errorf("RequeueAfter = %v, want the resync interval", res.RequeueAfter)
+	}
+	if got := testutil.ToFloat64(reconcilerActionsTotal.WithLabelValues(actionIntentError, reasonNone)); got != before+1 {
+		t.Errorf("intent_error counter = %v, want %v", got, before+1)
+	}
+
+	live := &unleashv1.Unleash{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: broken.Namespace, Name: "team-f"}, live); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if live.ResourceVersion != broken.ResourceVersion {
+		t.Errorf("an unresolvable intent must not write (RV %s -> %s)", broken.ResourceVersion, live.ResourceVersion)
+	}
+}
+
+// The gauge is the denominator for the action counters, so it must count
+// bifrost-managed instances only.
+func TestCountManagedInstances_CountsOnlyManaged(t *testing.T) {
+	managedA := renderManaged(t, "team-g")
+	managedB := renderManaged(t, "team-h")
+	foreign := renderManaged(t, "team-i")
+	delete(foreign.Labels, kubernetes.LabelManagedBy)
+
+	c := newFakeClient(t, &managedA, &managedB, &foreign)
+	r := newReconciler(c)
+
+	r.countManagedInstances(context.Background())
+
+	if got := testutil.ToFloat64(managedInstances); got != 2 {
+		t.Errorf("managed_instances = %v, want 2", got)
 	}
 }
