@@ -202,3 +202,77 @@ func TestLoadConfigFromCRD_KeepsAllowedTeamsWithoutFederation(t *testing.T) {
 		})
 	}
 }
+
+// Update renders the whole CRD from a config the caller assembled from an
+// earlier read, so a write landing in between is overwritten wholesale — the
+// resourceVersion copied from Update's own Get is younger than the data being
+// written and protects nothing. The caller's resourceVersion turns that into a
+// conflict it can surface or retry.
+func TestUpdate_ExpectedResourceVersionDetectsConcurrentWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// precondition picks what the caller passes, given the version it read.
+		precondition func(read string) string
+		wantConflict bool
+	}{
+		{
+			name:         "the version the caller read is stale",
+			precondition: func(read string) string { return read },
+			wantConflict: true,
+		},
+		{
+			name:         "no precondition still overwrites",
+			precondition: func(string) string { return "" },
+			wantConflict: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			scheme := repoTestScheme(t)
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(
+					&unleashv1.Unleash{
+						ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "unleash-ns"},
+						Spec:       unleashv1.UnleashSpec{CustomImage: "quay.io/unleash/unleash-server:5.1.2"},
+					},
+					&fqdnV1alpha3.FQDNNetworkPolicy{
+						ObjectMeta: metav1.ObjectMeta{Name: "team-a-fqdn", Namespace: "unleash-ns"},
+					},
+				).
+				Build()
+
+			logger := logrus.New()
+			logger.SetOutput(io.Discard)
+			repo := NewUnleashRepository(client, repoTestConfig(), logger)
+
+			read, err := repo.Get(ctx, "team-a")
+			require.NoError(t, err)
+			require.NotEmpty(t, read.ResourceVersion, "the read must carry the version to write against")
+
+			// Another writer — the migration reconciler in production — moves
+			// the instance onto a release channel after the caller's read.
+			concurrent := &unleashv1.Unleash{}
+			require.NoError(t, client.Get(ctx, ctrl.ObjectKey{Name: "team-a", Namespace: "unleash-ns"}, concurrent))
+			concurrent.Spec.CustomImage = ""
+			concurrent.Spec.ReleaseChannel.Name = "stable-v6"
+			require.NoError(t, client.Update(ctx, concurrent))
+
+			err = repo.Update(ctx, &unleash.Config{Name: "team-a", CustomVersion: "5.1.2", LogLevel: "warn"},
+				unleash.UpdateOptions{ExpectedResourceVersion: tc.precondition(read.ResourceVersion)})
+
+			after := &unleashv1.Unleash{}
+			require.NoError(t, client.Get(ctx, ctrl.ObjectKey{Name: "team-a", Namespace: "unleash-ns"}, after))
+
+			if tc.wantConflict {
+				require.Error(t, err, "a write against a superseded version must not be applied")
+				assert.True(t, apierrors.IsConflict(err), "the conflict must survive wrapping so callers can map it to 409: %v", err)
+				assert.Equal(t, "stable-v6", after.Spec.ReleaseChannel.Name, "the concurrent write must survive")
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Empty(t, after.Spec.ReleaseChannel.Name, "without a precondition the concurrent write is lost, by design")
+		})
+	}
+}

@@ -100,7 +100,7 @@ func (m *MockUnleashRepository) Create(ctx context.Context, cfg *domainUnleash.C
 	return nil
 }
 
-func (m *MockUnleashRepository) Update(ctx context.Context, cfg *domainUnleash.Config) error {
+func (m *MockUnleashRepository) Update(ctx context.Context, cfg *domainUnleash.Config, opts domainUnleash.UpdateOptions) error {
 	if _, ok := m.instances[cfg.Name]; !ok {
 		return errors.New("instance not found")
 	}

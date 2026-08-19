@@ -114,7 +114,7 @@ func (m *MockUnleashRepository) Create(ctx context.Context, cfg *unleash.Config)
 	return nil // Not used in migration tests
 }
 
-func (m *MockUnleashRepository) Update(ctx context.Context, cfg *unleash.Config) error {
+func (m *MockUnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opts unleash.UpdateOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

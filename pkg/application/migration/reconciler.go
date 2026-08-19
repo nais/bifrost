@@ -179,7 +179,11 @@ func (r *Reconciler) migrateInstance(ctx context.Context, name, targetChannel st
 		return
 	}
 
-	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
+	// No resourceVersion precondition: cfg is rebuilt from the CRD read a few
+	// lines above, so the window is one call wide, and a conflict would fail a
+	// one-shot batch that never retries. The API update path, which merges a
+	// request body onto a much older read, does pass one.
+	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
 		log.WithError(err).Error("Failed to update instance to release channel")
 		state.status = statusFailed
 		r.pending.remove(name)
@@ -226,7 +230,7 @@ func (r *Reconciler) rollback(ctx context.Context, name, originalVersion string)
 		return err
 	}
 
-	if err := r.unleashRepo.Update(ctx, cfg); err != nil {
+	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
 		log.WithError(err).Error("Failed to rollback instance")
 		return err
 	}

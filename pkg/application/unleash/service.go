@@ -24,7 +24,7 @@ type IService interface {
 	Get(ctx context.Context, name string) (*unleash.Instance, error)
 	GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, error)
 	Create(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error)
-	Update(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error)
+	Update(ctx context.Context, config *unleash.Config, opts unleash.UpdateOptions) (*unleashv1.Unleash, error)
 	Delete(ctx context.Context, name string) error
 }
 
@@ -64,9 +64,11 @@ type Service struct {
 	//
 	// Scope: this covers calls that go through Service. The migration and
 	// channel reconcilers write through unleash.Repository directly and are not
-	// serialized by it; the worst interleaving there is a reconciler update
-	// racing a delete and failing on Conflict or NotFound, which errors rather
-	// than damages.
+	// serialized by it, so a reconciler write can land at any point during an
+	// API update. That used to be silently overwritten by the update rendering
+	// state its caller read before the reconciler wrote; Update now carries the
+	// caller's resourceVersion as a precondition, so the interleaving fails with
+	// a Conflict instead.
 	instanceLocks sync.Map // instance name -> *sync.Mutex
 }
 
@@ -199,8 +201,13 @@ func (s *Service) Create(ctx context.Context, config *unleash.Config) (crd *unle
 	return crd, nil
 }
 
-// Update updates an existing unleash instance
-func (s *Service) Update(ctx context.Context, config *unleash.Config) (*unleashv1.Unleash, error) {
+// Update writes a new configuration for an existing instance.
+//
+// opts.ExpectedResourceVersion should carry the version the caller read the
+// instance at, since callers derive parts of config (version source, federation
+// nonce, allowed teams) from that read. A write landing in between then fails
+// with a Conflict rather than reverting it.
+func (s *Service) Update(ctx context.Context, config *unleash.Config, opts unleash.UpdateOptions) (*unleashv1.Unleash, error) {
 	// Serialize with any create or delete in flight for this instance.
 	defer s.lockInstance(config.Name)()
 
@@ -214,7 +221,7 @@ func (s *Service) Update(ctx context.Context, config *unleash.Config) (*unleashv
 	newSource := config.VersionSource()
 
 	// Update the unleash instance
-	if err := s.repository.Update(ctx, config); err != nil {
+	if err := s.repository.Update(ctx, config, opts); err != nil {
 		return nil, err
 	}
 

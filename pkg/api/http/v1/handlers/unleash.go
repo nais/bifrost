@@ -213,6 +213,7 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 //	@Success		200		{object}	Unleash
 //	@Failure		400		{object}	ErrorResponse	"Invalid request or validation error"
 //	@Failure		404		{object}	ErrorResponse	"Instance not found"
+//	@Failure		409		{object}	ErrorResponse	"Instance was modified concurrently"
 //	@Failure		500		{object}	ErrorResponse	"Internal server error"
 //	@Router			/v1/unleash/{name} [put]
 func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
@@ -341,8 +342,25 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 		accessLog.Info("Changing allowed teams")
 	}
 
-	crd, err := h.service.Update(ctx, config)
+	// The request body is merged onto what `existing` said, so the write must be
+	// conditional on that read. Otherwise a reconciler or another client writing
+	// in between is overwritten by preserved values that are already stale.
+	crd, err := h.service.Update(ctx, config, domainunleash.UpdateOptions{
+		ExpectedResourceVersion: existing.ResourceVersion,
+	})
 	if err != nil {
+		// A conflict means somebody else wrote first, so the request is not
+		// wrong and the server is not broken: the caller has to re-read and
+		// decide again. Reporting it as a 500 hides a retryable outcome.
+		if apierrors.IsConflict(err) {
+			h.logger.WithContext(ctx).WithError(err).WithField("name", name).Warn("Update conflicted with a concurrent write")
+			c.JSON(http.StatusConflict, ErrorResponse{
+				Error:      "conflict",
+				Message:    "Instance was modified by another writer, re-read it and retry",
+				StatusCode: http.StatusConflict,
+			})
+			return
+		}
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Failed to update instance")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:      "update_failed",
