@@ -215,17 +215,23 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	// Build new CRD
 	unleashNew := BuildUnleashCRD(r.config, cfg)
 
-	// Preserve metadata
-	unleashNew.ObjectMeta.ResourceVersion = unleashOld.ObjectMeta.ResourceVersion
+	// Keep the live object's metadata and lay bifrost's own fields back on top.
+	// The render only ever fills in name, namespace and bifrost's two managed
+	// keys, so taking its metadata as written silently dropped everything else
+	// the instance carried: unleasherator's finalizer — present on every
+	// instance, and without which a later delete tears the instance down with no
+	// cleanup — plus ownerReferences and any labels and annotations set by
+	// someone other than bifrost.
+	rendered := unleashNew.DeepCopy()
+	unleashNew.ObjectMeta = *unleashOld.ObjectMeta.DeepCopy()
+	ApplyManagedMetadata(&unleashNew, rendered)
+
 	if opts.ExpectedResourceVersion != "" {
 		// The caller's read is the one the config was derived from, so it is the
 		// version the write must be conditional on. Anything newer means another
 		// writer got in between and the API server rejects this with a Conflict.
 		unleashNew.ObjectMeta.ResourceVersion = opts.ExpectedResourceVersion
 	}
-	unleashNew.ObjectMeta.CreationTimestamp = unleashOld.ObjectMeta.CreationTimestamp
-	unleashNew.ObjectMeta.Generation = unleashOld.ObjectMeta.Generation
-	unleashNew.ObjectMeta.UID = unleashOld.ObjectMeta.UID
 
 	// Update CRD
 	if err := r.kubeClient.Update(ctx, &unleashNew); err != nil {

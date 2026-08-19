@@ -276,3 +276,60 @@ func TestUpdate_ExpectedResourceVersionDetectsConcurrentWrite(t *testing.T) {
 		})
 	}
 }
+
+// Update renders a whole CRD and PUTs it, so anything the render does not
+// produce is dropped from metadata unless it is carried over deliberately. That
+// is not a cosmetic loss: unleasherator's finalizer is what makes it clean up
+// after a deleted instance, and the federation canary marks approved smoke-test
+// sources with labels of its own.
+func TestUpdate_PreservesForeignMetadata(t *testing.T) {
+	ctx := context.Background()
+	scheme := repoTestScheme(t)
+
+	live := &unleashv1.Unleash{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-a",
+			Namespace:  "unleash-ns",
+			Finalizers: []string{"unleash.nais.io/finalizer"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "unleasherator.nais.io/v1",
+				Kind:       "RemoteUnleash",
+				Name:       "team-a-remote",
+				UID:        "0d6a1f3e-6a2a-4f2b-9f4a-1f9a2b3c4d5e",
+			}},
+			Labels:      map[string]string{"unleasherator.nais.io/federation-smoke-test": "approved"},
+			Annotations: map[string]string{"unleasherator.nais.io/federation-replay": "2026-08-18T09:00:00Z"},
+		},
+		Spec: unleashv1.UnleashSpec{CustomImage: "quay.io/unleash/unleash-server:5.1.2"},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(live, &fqdnV1alpha3.FQDNNetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "team-a-fqdn", Namespace: "unleash-ns"},
+		}).
+		Build()
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	repo := NewUnleashRepository(client, repoTestConfig(), logger)
+
+	require.NoError(t, repo.Update(ctx, &unleash.Config{Name: "team-a", CustomVersion: "5.1.2", LogLevel: "warn"},
+		unleash.UpdateOptions{}))
+
+	after := &unleashv1.Unleash{}
+	require.NoError(t, client.Get(ctx, ctrl.ObjectKey{Name: "team-a", Namespace: "unleash-ns"}, after))
+
+	assert.Equal(t, []string{"unleash.nais.io/finalizer"}, after.Finalizers,
+		"dropping the finalizer lets a later delete skip unleasherator's cleanup")
+	if assert.Len(t, after.OwnerReferences, 1, "the owner must survive a PUT") {
+		assert.Equal(t, "team-a-remote", after.OwnerReferences[0].Name)
+	}
+	assert.Equal(t, "approved", after.Labels["unleasherator.nais.io/federation-smoke-test"],
+		"a foreign label marks state bifrost does not own and must not clear")
+	assert.Equal(t, "2026-08-18T09:00:00Z", after.Annotations["unleasherator.nais.io/federation-replay"])
+
+	// Bifrost's own two keys are still bifrost's to write.
+	assert.Equal(t, ManagedByBifrost, after.Labels[LabelManagedBy])
+	assert.NotEmpty(t, after.Annotations[AnnotationDesiredState])
+}
