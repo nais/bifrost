@@ -121,7 +121,13 @@ func TestUnmarshalIntent_RefusesAnnotationMissingAFieldThisSchemaExpects(t *test
 // annotation means, so it has to come with a bump — and this list is where you
 // find out you forgot.
 func TestIntentSchemaVersionPinsConfigFields(t *testing.T) {
-	want := []string{
+	// Keyed by schema version, so the obvious mechanical response to a failure —
+	// paste the new field into the list — is not enough on its own. Adding a
+	// field without bumping IntentSchemaVersion leaves no entry for the new
+	// version and fails here, which is the whole point: an unbumped schema means
+	// every existing annotation still reads as current, gets zero-filled, and is
+	// rendered back onto every live instance carrying one.
+	fieldsByVersion := map[int][]string{1: {
 		"Name string `json:\"Name\"`",
 		"CustomVersion string `json:\"CustomVersion\"`",
 		"ReleaseChannelName string `json:\"ReleaseChannelName\"`",
@@ -133,7 +139,12 @@ func TestIntentSchemaVersionPinsConfigFields(t *testing.T) {
 		"LogLevel string `json:\"LogLevel\"`",
 		"DatabasePoolMax int `json:\"DatabasePoolMax\"`",
 		"DatabasePoolIdleTimeoutMs int `json:\"DatabasePoolIdleTimeoutMs\"`",
-	}
+	}}
+
+	want, ok := fieldsByVersion[IntentSchemaVersion]
+	require.True(t, ok,
+		"no field list pinned for schema version %d: bump the version and add its entry together, or an old annotation is silently read as current",
+		IntentSchemaVersion)
 
 	typ := reflect.TypeOf(unleash.Config{})
 	got := make([]string, 0, typ.NumField())
@@ -143,7 +154,48 @@ func TestIntentSchemaVersionPinsConfigFields(t *testing.T) {
 	}
 
 	assert.Equal(t, want, got,
-		"unleash.Config's fields changed: bump kubernetes.IntentSchemaVersion so annotations written under the old schema are refused instead of zero-filled, then update this list")
+		"unleash.Config's fields changed: bump kubernetes.IntentSchemaVersion so annotations written under the old schema are refused instead of zero-filled, then add a new entry rather than editing this one")
+}
+
+// The list above compares the struct to a list, so updating both together slips
+// a new field past it. This tests the hazard itself instead: a frozen schema-1
+// annotation, written out when the schema was defined, must still populate every
+// field of the config this build reads.
+//
+// Add a field without bumping the version and that field is absent from the
+// frozen payload, so it deserialises to its zero value — which is precisely what
+// then gets rendered onto every live instance carrying an old annotation. There
+// is no way to satisfy this by editing a list: either bump the version, or
+// change what schema 1 has always meant, and the latter is visible in review.
+func TestSchemaOneAnnotationStillFillsEveryField(t *testing.T) {
+	if IntentSchemaVersion != 1 {
+		t.Skipf("frozen payload describes schema 1, build reads %d — freeze one for the new version too", IntentSchemaVersion)
+	}
+
+	const frozenSchemaOne = `{"schemaVersion":1,` +
+		`"Name":"team-a",` +
+		`"CustomVersion":"v5.1.2",` +
+		`"ReleaseChannelName":"stable",` +
+		`"EnableFederation":true,` +
+		`"FederationNonce":"abcd1234",` +
+		`"AllowedTeams":"team-a,team-b",` +
+		`"AllowedNamespaces":"ns-a,ns-b",` +
+		`"AllowedClusters":"dev-gcp,prod-gcp",` +
+		`"LogLevel":"warn",` +
+		`"DatabasePoolMax":7,` +
+		`"DatabasePoolIdleTimeoutMs":900}`
+
+	cfg, err := UnmarshalIntent(frozenSchemaOne)
+	require.NoError(t, err)
+
+	v := reflect.ValueOf(*cfg)
+	typ := v.Type()
+	for i := range typ.NumField() {
+		assert.Falsef(t, v.Field(i).IsZero(),
+			"%s is zero after reading a schema-1 annotation: the field is not in schema 1, so every existing "+
+				"annotation zero-fills it and the reconciler renders that zero onto live instances — bump IntentSchemaVersion",
+			typ.Field(i).Name)
+	}
 }
 
 // Rendering is what actually writes the annotation, so the version has to reach

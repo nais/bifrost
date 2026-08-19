@@ -230,6 +230,13 @@ func (r *Reconciler) rollback(ctx context.Context, name, originalVersion string)
 		return err
 	}
 
+	// No precondition, and unlike the migrate call this window is not one call
+	// wide: originalValue was captured before waitForHealthy, which runs for up
+	// to MigrationHealthTimeout (5m by default). A user PUT landing inside that
+	// window is reverted here. A precondition would not help — it would only
+	// turn a silent revert into a failed rollback, leaving the instance on the
+	// version the migration could not make healthy. Recording it so the choice
+	// is visible rather than accidental.
 	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
 		log.WithError(err).Error("Failed to rollback instance")
 		return err
