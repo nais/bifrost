@@ -55,3 +55,56 @@ spec:
           summary: "No connected instances for Unleash"
           consequence: "Unleasherator is not able to connect to Unleash and create new API keys for applications."
           action: "Check the Unleasherator logs for errors and investigate the root cause of the issue."
+
+    - name: bifrost_reconciler_alerts
+      rules:
+      # The census is what makes every other reconciler number readable, so its
+      # freshness is the first thing to alert on.
+      #
+      # Gated by a Helm conditional rather than by a term in the expression: the
+      # enabled flag is not exported as a metric, and a rendered Go bool is not
+      # valid PromQL — `false and <vector>` is rejected outright. Rendering the
+      # rule only where the reconciler is enabled gives the same meaning and a
+      # valid expression. It also lets the threshold catch a timestamp stuck at
+      # 0, which is "no census has ever completed" — the case a `> 0` guard
+      # would silently exclude, and the one that matters most.
+{{- if .Values.backend.reconciler.enabled }}
+      - alert: BifrostReconcilerCensusStalled
+        expr: (time() - bifrost_reconciler_instances_updated_timestamp_seconds) > 1800
+        for: 10m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "The bifrost reconciler has not completed an instance census in over 30 minutes"
+          consequence: "Every bifrost_reconciler_* gauge is stale, so the fleet counts cannot be trusted and a drifting instance would go unreported. A timestamp of 0 means no census has ever completed — the manager is likely not running at all."
+          action: "Check the bifrost-backend logs for a cache-sync or namespace error. See docs/RECONCILER_RUNBOOK.md."
+{{- end }}
+
+      # Distinct from the census: this fires when the loop runs but individual
+      # instances fail. intent_error is included because an instance whose
+      # desired-state annotation cannot be read drops out of the managed set
+      # while every other metric still reads healthy.
+      - alert: BifrostReconcilerErrors
+        expr: sum(rate(bifrost_reconciler_actions_total{action=~"error|intent_error"}[10m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "The bifrost reconciler is failing to reconcile instances"
+          consequence: "Affected instances are not converging to their configuration, and an instance failing on intent_error has dropped out of the managed set without changing any other metric."
+          action: "Break down by reason: sum by (action, reason) (bifrost_reconciler_actions_total). See docs/RECONCILER_RUNBOOK.md."
+
+      # Adoption is a one-shot sweep, so a sustained error rate means instances
+      # are being left invisible to the reconciler rather than a transient 409.
+      - alert: BifrostAdoptionFailing
+        expr: sum(rate(bifrost_reconciler_adoptions_total{result="error"}[15m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost keeps failing to adopt Unleash instances"
+          consequence: "Instances that cannot be stamped stay invisible to the reconciler and keep counting as unmanaged, so the fleet never converges and would_change under-reports."
+          action: "Check the bifrost-backend logs for the failing instance names. A persistent conflict suggests another writer; a permission error suggests RBAC."

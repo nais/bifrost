@@ -322,25 +322,38 @@ a render that can never equal the stored object — the `omitempty`-on-bool case
 
 ## 7. Alerts
 
-`charts/bifrost/templates/prometheus-alerts.yaml` has **no reconciler rule** as of this commit; the
-`PrometheusRule` covers Unleash database latency, ingress errors and unleasherator connectivity only.
-#588 makes shipping alerts a precondition for `dryRun=false`. The two rules that are expressible with
-the metrics that exist:
+`charts/bifrost/templates/prometheus-alerts.yaml` ships three reconciler rules in the
+`bifrost_reconciler_alerts` group. They exist because this is a fleet-wide, multi-tenant service and
+nobody watches a dashboard continuously — an alert is the only mechanism that reaches a tenant where
+the loop silently never started.
 
-```yaml
-- alert: BifrostReconcilerErrors
-  expr: sum(rate(bifrost_reconciler_actions_total{action=~"error|intent_error"}[10m])) > 0
-  for: 15m
+| Alert | Fires when | Why it is the one worth having |
+|---|---|---|
+| `BifrostReconcilerCensusStalled` | no successful census for 30 min | Every other reconciler gauge is derived from the census, so a stale census makes all of them lie quietly. |
+| `BifrostReconcilerErrors` | `action=~"error\|intent_error"` rate > 0 for 15 min | `intent_error` in particular: an instance whose annotation cannot be read drops out of the managed set while every other metric still reads healthy. |
+| `BifrostAdoptionFailing` | adoption errors for 30 min | Adoption is a one-shot sweep, so a sustained rate means instances are being left invisible rather than a transient conflict. |
 
-- alert: BifrostReconcilerCensusStalled
-  expr: bifrost_reconciler_instances_updated_timestamp_seconds > 0
-        and (time() - bifrost_reconciler_instances_updated_timestamp_seconds) > 1800
-  for: 10m
-```
+### Why the census rule is gated in Helm rather than in PromQL
 
-The third rule #588 asks for — *absence of activity while enabled* — **cannot be written today**, for
-the reason in §4: nothing exports the enabled flag, and every disabled bifrost publishes the same
-zeros and the same absent counter as a broken enabled one. Either export an info gauge first, or
-accept that this case is caught by the census-stalled rule only after the first successful census.
+The reconciler's enabled flag is **not exported as a metric**, so the rule cannot test it in the
+expression. Rendering the Go bool into PromQL does not work either — `false and <vector>` is not a
+valid expression and Prometheus rejects the whole rule. The rule is therefore wrapped in
+`{{- if .Values.backend.reconciler.enabled }}` and simply does not exist where the reconciler is off.
 
-Thresholds above are proposals, not tuned against observed data.
+That gating is what makes the threshold safe to write **without** a `> 0` guard on the timestamp, and
+that matters: a timestamp stuck at `0` means *no census has ever completed*, which is the most
+important case and precisely the one a `> 0` guard silently excludes.
+
+This is also why `backend.reconciler.enabled` defaults to `true` in `Feature.yaml`. While tenants
+differ, a zero timestamp is ambiguous between "switched off here" and "running but broken". A uniform
+default collapses that to the second reading, which is the alertable one.
+
+### What is still not alertable
+
+Nothing distinguishes a tenant that has *deliberately* turned the reconciler off from one where the
+default failed to apply — both simply have no rule. That is acceptable while off-by-choice is rare;
+if it stops being rare, export an info gauge for the enabled flag.
+
+Thresholds are proposals, not tuned against observed data. Revisit once step A has produced a
+baseline.
+
