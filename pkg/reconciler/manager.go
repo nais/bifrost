@@ -26,6 +26,9 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 	if err != nil {
 		return nil, err
 	}
+	if err := checkAdoptionIsObserveOnly(cfg); err != nil {
+		return nil, err
+	}
 
 	scheme := runtime.NewScheme()
 	if err := client_go_scheme.AddToScheme(scheme); err != nil {
@@ -86,9 +89,37 @@ func NewManager(cfg *config.Config, logger *logrus.Logger) (manager.Manager, err
 // so the manager refuses independently — and the fleet adopter reuses this
 // rather than growing a third copy.
 func instanceNamespace(cfg *config.Config) (string, error) {
-	ns := strings.TrimSpace(cfg.Unleash.InstanceNamespace)
-	if ns == "" {
+	ns := cfg.Unleash.InstanceNamespace
+	if strings.TrimSpace(ns) == "" {
 		return "", fmt.Errorf("BIFROST_UNLEASH_INSTANCE_NAMESPACE is empty: an empty namespace means all namespaces, not none")
 	}
+	// Rejected rather than trimmed. Trimming made this the only place the
+	// padding disappeared: everything else — every namespaced List/Get/Delete
+	// and the census — used the raw value, so " bifrost-unleash " passed
+	// validation, adopted instances under the trimmed name, and left the census
+	// failing forever with "unknown namespace for the cache". One name, or no
+	// start.
+	if ns != strings.TrimSpace(ns) {
+		return "", fmt.Errorf("BIFROST_UNLEASH_INSTANCE_NAMESPACE has leading or trailing whitespace (%q): a namespace name cannot contain it, and trimming it here would leave the rest of bifrost using the padded value", ns)
+	}
 	return ns, nil
+}
+
+// checkAdoptionIsObserveOnly refuses the one settings combination in which
+// adoption stops being additive.
+//
+// Adoption's job is to put instances created before the desired-state
+// annotation existed into the reconcile queue, and none of them carries an
+// intent. The reconciler observes those instances and never writes them (see
+// Reconcile), so the combination is survivable on its own — but that safety
+// rests on a rule one edit away from being relaxed, and the blast radius on the
+// other side of it is the entire fleet rewritten from a lossy read-back of its
+// own spec. Config.Validate rejects this at startup; this is the second,
+// independent refusal, at the point where the writing reconciler is actually
+// constructed.
+func checkAdoptionIsObserveOnly(cfg *config.Config) error {
+	if cfg.Reconciler.AutoAdopt && !cfg.Reconciler.DryRun {
+		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_DRY_RUN=true: adoption queues instances that have no desired-state annotation, and converging one means rendering it from a lossy read-back of its own spec")
+	}
+	return nil
 }

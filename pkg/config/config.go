@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -241,37 +243,87 @@ func Setup(com *cobra.Command) {
 //
 // The `,required` tag is not the guard it looks like: go-envconfig only checks
 // whether the variable was *found*, and os.LookupEnv reports a set-but-empty
-// variable as found. Every `,required` field can therefore still arrive as "".
-// For most of them that surfaces as a loud, obvious failure. For the ones below
-// it does not — an empty value silently *widens* scope instead of narrowing it,
-// which is the failure mode that looks like success.
+// variable as found. Every `,required` field can therefore still arrive as "",
+// and for some of them an empty value silently *widens* scope instead of
+// narrowing it — an empty BIFROST_UNLEASH_INSTANCE_NAMESPACE is
+// metav1.NamespaceAll in both client-go and controller-runtime, so it does not
+// mean "nothing", it means every namespace in the cluster, including the tenant
+// namespaces unleasherator owns.
+//
+// The fields are found by walking the struct tags rather than being listed here.
+// A hand-written list covered 4 of the 14 `,required` fields and could not
+// notice a fifteenth being added, so what it encoded was not "the dangerous
+// ones" but "the ones somebody had thought about".
 func (c *Config) Validate() error {
-	required := []struct {
-		env   string
-		value string
-	}{
-		// Every Unleash List/Get/Delete is namespaced by this, and so is the
-		// reconciler's informer. An empty namespace is metav1.NamespaceAll in
-		// both client-go and controller-runtime, so it does not mean "nothing"
-		// — it means every namespace in the cluster, including the tenant
-		// namespaces unleasherator owns.
-		{"BIFROST_UNLEASH_INSTANCE_NAMESPACE", c.Unleash.InstanceNamespace},
-		// The two halves of every Cloud SQL address, including the database and
-		// user Delete calls.
-		{"BIFROST_GOOGLE_PROJECT_ID", c.Google.ProjectID},
-		{"BIFROST_UNLEASH_SQL_INSTANCE_ID", c.Unleash.SQLInstanceID},
-		// The workload identity every rendered instance runs as, and therefore
-		// what it may reach in Google.
-		{"BIFROST_UNLEASH_INSTANCE_SERVICEACCOUNT", c.Unleash.InstanceServiceaccount},
+	if err := validateRequired(reflect.ValueOf(c).Elem()); err != nil {
+		return err
 	}
 
-	for _, f := range required {
-		if strings.TrimSpace(f.value) == "" {
-			return fmt.Errorf("%s must be set to a non-empty value", f.env)
+	// Adoption exists to queue instances created before the desired-state
+	// annotation did, so every instance it stamps arrives without a recorded
+	// intent. The reconciler observes those and never writes them, which is what
+	// makes adoption survivable — but that is a rule in one function, and the
+	// blast radius on the other side of it is every instance in the namespace
+	// rewritten from a lossy read-back of its own spec. Adoption therefore only
+	// runs alongside a reconciler that cannot write at all.
+	if c.Reconciler.AutoAdopt && !c.Reconciler.DryRun {
+		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_DRY_RUN=true: adoption queues instances that carry no desired-state annotation, and converging one means rendering it from a lossy read-back of its own spec")
+	}
+
+	return nil
+}
+
+// validateRequired walks a config struct and holds every `,required` string
+// field to what the tag reads as: present and usable. Non-string fields are
+// left alone — envconfig fails to parse an empty duration or bool, so those
+// cannot arrive blank in the first place.
+func validateRequired(v reflect.Value) error {
+	t := v.Type()
+	for i := range t.NumField() {
+		field := t.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+
+		if field.Type.Kind() == reflect.Struct {
+			if err := validateRequired(v.Field(i)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		name, required := requiredEnvName(field)
+		if !required || field.Type.Kind() != reflect.String {
+			continue
+		}
+
+		value := v.Field(i).String()
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s must be set to a non-empty value", name)
+		}
+		// Padding is rejected rather than trimmed, because only some readers
+		// trim: a padded namespace passes as non-empty here, adopts instances
+		// under the trimmed name, and leaves the informer cache looking up the
+		// padded one forever.
+		if value != strings.TrimSpace(value) {
+			return fmt.Errorf("%s has leading or trailing whitespace: %q", name, value)
 		}
 	}
 
 	return nil
+}
+
+// requiredEnvName returns the variable a field reads and whether it is tagged
+// `,required`. The tag is `NAME[,opt[,opt...]]`, so the options are everything
+// after the first comma.
+func requiredEnvName(field reflect.StructField) (string, bool) {
+	tag, ok := field.Tag.Lookup("env")
+	if !ok {
+		return "", false
+	}
+
+	parts := strings.Split(tag, ",")
+	return parts[0], slices.Contains(parts[1:], "required")
 }
 
 func New(ctx context.Context) *Config {
