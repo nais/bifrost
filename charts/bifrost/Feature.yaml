@@ -85,6 +85,8 @@ values:
       adoption halts for good and bifrost_reconciler_adoption_halted goes to 1; only a restart or toggling this
       switch off and on again resumes it. Watch bifrost_reconciler_adoptions_total (result=adopted, unhealthy,
       halted) rather than the logs.
+    computed:
+      template: 'true'
     config:
       type: bool
 

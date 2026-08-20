@@ -40,7 +40,9 @@ backend:
   #   1. enabled + dryRun            — measure the instances already labelled
   #   2. enabled + dryRun + autoAdopt — adopt the rest, one instance per resync
   #                                      interval, measure the whole fleet
-  #   3. enabled + dryRun            — autoAdopt off again; the sweep is now cost
+  #   3. enabled + dryRun + autoAdopt — left on; adoption shares the census's
+  #                                      List, so a swept fleet costs nothing and
+  #                                      a later stray instance is picked up
   #   4. enabled                     — dryRun off, the reconciler converges
   # Step 4 only converges instances that carry a desired-state annotation.
   # Adopted instances have none, and are reported as
@@ -80,6 +82,10 @@ backend:
     #     bifrost_reconciler_adoption_halted goes to 1. It does not recover on
     #     its own: read the error log line, look at the instance, then restart
     #     bifrost or toggle this flag.
+    # Chart default off so a bare `helm install` does not start writing labels to
+    # objects it has just met. Fasit computes true; see Feature.yaml for the
+    # pacing and the halt behaviour, and keep the override — turning this off is
+    # the fastest way to stop a sweep that is doing something unexpected.
     autoAdopt: false
     resyncInterval: "10m"
 
