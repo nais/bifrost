@@ -137,3 +137,42 @@ spec:
           summary: "Bifrost keeps failing to adopt Unleash instances"
           consequence: "Instances that cannot be stamped stay invisible to the reconciler and keep counting as unmanaged, so the fleet never converges and would_change under-reports."
           action: "Check the bifrost-backend logs for the failing instance names. A persistent conflict suggests another writer; a permission error suggests RBAC."
+
+    - name: bifrost_auth_alerts
+      rules:
+      # Before enforcement a rejected request was impossible; an unauthenticated
+      # one was merely counted. After it, a rejection means a caller has lost
+      # every write path it has — nais-api not sending the key locks a whole
+      # tenant out of creating, updating and deleting Unleash instances, and the
+      # only symptom a user sees is that Console stops working.
+      #
+      # Deliberately not gated on backend.auth.enforced: the counter can only
+      # increment where enforcement is on, so the rule is inert elsewhere, and
+      # gating it would remove coverage from exactly the environments that have
+      # it turned on out of band.
+      - alert: BifrostAuthRejectingRequests
+        expr: sum(rate(bifrost_api_auth_requests_total{outcome="rejected"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost is rejecting unauthenticated API requests"
+          consequence: "A caller is presenting no key or the wrong one. If that caller is nais-api, every Unleash create, update and delete for this tenant is failing and Console appears broken to users."
+          action: "Compare the key in fasit against what nais-api is sending. As an emergency measure set backend.auth.enforced=false for this environment to restore service, then fix the key. See docs/RECONCILER_RUNBOOK.md."
+
+      # The mirror image, and the reason the accept phase existed: an
+      # unauthenticated request that is still being allowed means enforcement is
+      # off somewhere it should not be. Harmless in itself, but it is the state
+      # #580 exists to end, and without a rule nobody would notice a tenant that
+      # never got flipped.
+      - alert: BifrostAuthNotEnforced
+        expr: sum(rate(bifrost_api_auth_requests_total{outcome="unauthenticated_allowed"}[30m])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost is allowing unauthenticated API requests"
+          consequence: "Enforcement is off in this environment, so the API accepts calls with no key. The pre-shared key is providing no protection here."
+          action: "Check backend.auth.enforced in fasit for this environment. It should be true everywhere as of 2026-08-20; see #576 and #580."

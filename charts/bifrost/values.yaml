@@ -20,8 +20,11 @@ backend:
     # Comma-separated pre-shared keys (multiple allow zero-downtime rotation).
     # Mapped from fasit; empty means authentication is effectively disabled.
     apiKeys: ""  # mapped in fasit
-    # When true, requests without a valid key are rejected with 401. Keep false
-    # until nais-api is confirmed sending the key, then flip to true.
+    # When true, requests without a valid key are rejected with 401.
+    #
+    # The chart default stays false so a bare `helm install` — which has no keys
+    # either — does not reject everything it is sent. Fasit computes true for
+    # every environment; see Feature.yaml for why the override is still there.
     enforced: false
     # Name/key of the Secret (created by this chart when apiKeys is set) that
     # holds the keys and is mounted into bifrost's env as BIFROST_API_KEYS.
