@@ -24,9 +24,23 @@ values:
     description: Comma-separated keys accepted by the API. Multiple values allow rotation without downtime.
     computed:
       template: '"{{ .Management.bifrost_api_key }}"'
+  # Enforcement defaults on as of 2026-08-20, after a 24h window in which
+  # bifrost_api_auth_requests_total recorded 1373 authenticated requests, zero
+  # unauthenticated and zero rejected. The accept-then-enforce phase is over.
+  #
+  # The per-environment override is deliberately kept for now: enforcement is
+  # the one setting whose failure mode is total — a tenant whose nais-api is not
+  # sending the key loses every write path at once, and the fastest remedy has
+  # to be a toggle rather than a revert-and-redeploy. It is removed in #580 once
+  # a further 24h confirms nothing is rejected anywhere.
   backend.auth.enforced:
     displayName: Enforce API authentication (reject unauthenticated requests)
-    description: Off means accept-then-enforce — unauthenticated calls are allowed but logged and counted. Turn on per environment once nais-api is confirmed sending the key.
+    description: >-
+      On by default. A request without a valid key is rejected with 401, so a tenant whose nais-api is
+      not sending the key loses every write path. Turn off for a single environment only as an
+      emergency measure, and watch bifrost_api_auth_requests_total{outcome="rejected"}.
+    computed:
+      template: 'true'
     config:
       type: bool
   # Reconciler rollout, in order: enabled+dryRun -> +autoAdopt -> -autoAdopt -> -dryRun.
