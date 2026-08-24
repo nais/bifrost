@@ -11,7 +11,7 @@ require (
 	github.com/nais/unleasherator v0.0.0-20251216221129-efebc54203fe
 	github.com/oapi-codegen/runtime v1.6.0
 	github.com/sethvargo/go-envconfig v1.4.3
-	github.com/sirupsen/logrus v1.9.4
+	github.com/sirupsen/logrus v1.10.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.293.0
