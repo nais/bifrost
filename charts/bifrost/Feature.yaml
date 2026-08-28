@@ -159,13 +159,14 @@ values:
     computed:
       template: '"{{ .Management.bifrost_unleash_sql_instance_region }}"'
 
-  backend.unleash.teamsApiToken:
-    displayName: Teams API key for Unleash instances
+  backend.unleash.naisApiAddress:
+    displayName: Nais API gRPC address for Unleash instances
     computed:
-      template: '"{{ .Management.unleash_teams_api_key }}"'
-  backend.unleash.teamsApiUrl:
+      template: '"{{ .Management.nais_api_grpc_address }}"'
+  backend.unleash.naisApiNamespace:
+    displayName: Nais API namespace for Unleash instances
     computed:
-      template: '"https://{{ subdomain . "console" }}/graphql"'
+      template: '"{{ .Management.nais_api_namespace }}"'
   backend.unleash.webIngressClass:
     displayName: Web Ingress Class
     computed:

@@ -114,6 +114,10 @@ backend:
     # Unleash web oauth config
     # webOAuthJWTAudience: # mapped in fasit
 
+    # Nais API gRPC endpoint for team authorization
+    naisApiAddress: nais-api.nais:3001
+    naisApiNamespace: nais
+
     # Default release channel for new instances (optional)
     # Set via Fasit per environment once ReleaseChannel CRDs are available
     defaultReleaseChannel: ""
@@ -135,11 +139,6 @@ backend:
       healthTimeout: "5m"
       delay: "30s"
 
-    # Unleash teams config
-    teamsApiUrl: https://console.nav.cloud.nais.io/graphql
-    # teamsApiToken:  # mapped in fasit
-    teamsApiTokenSecretName: teams-api-token
-    teamsApiTokenSecretKey: token
 
   google:
     # projectId:  # mapped in fasit

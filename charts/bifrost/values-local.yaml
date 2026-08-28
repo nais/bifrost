@@ -16,8 +16,8 @@ backend:
     apiIngressClass: foo
     apiIngressHost: foo.bar
 
-
-    teamsApiToken: foo
+    naisApiAddress: nais-api.nais:3001
+    naisApiNamespace: nais
 
     # Channel migration example config (disabled by default)
     channelMigration:
