@@ -63,8 +63,8 @@ backend:
     apiIngressHost: unleash-api.chart-testing.example.com
     webOAuthJWTAudience: chart-testing-oauth-client-id
 
-    naisApiAddress: nais-api.nais:3001
-    naisApiNamespace: nais
+    naisApiAddress: nais-api.nais-system:3001
+    naisApiNamespace: nais-system
 
 networkPolicy:
   enabled: true

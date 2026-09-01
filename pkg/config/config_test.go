@@ -82,8 +82,8 @@ func validConfig() *Config {
 			InstanceWebOAuthJWTAudience: "audience",
 			InstanceAPIIngressHost:      "unleash-api.example",
 			InstanceAPIIngressClass:     "internal-haproxy",
-			NaisApiAddress:              "nais-api.nais:3001",
-			NaisApiNamespace:            "nais",
+			NaisApiAddress:              "nais-api.nais-system:3001",
+			NaisApiNamespace:            "nais-system",
 		},
 	}
 }
@@ -214,8 +214,8 @@ func TestNew_RefusesAnInvalidConfiguration(t *testing.T) {
 		"BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE=audience",
 		"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST=api.example",
 		"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS=api-class",
-		"BIFROST_UNLEASH_INSTANCE_NAIS_API_ADDRESS=nais-api.nais:3001",
-		"BIFROST_UNLEASH_INSTANCE_NAIS_API_NAMESPACE=nais",
+		"BIFROST_UNLEASH_INSTANCE_NAIS_API_ADDRESS=nais-api.nais-system:3001",
+		"BIFROST_UNLEASH_INSTANCE_NAIS_API_NAMESPACE=nais-system",
 	)
 
 	out, err := cmd.CombinedOutput()

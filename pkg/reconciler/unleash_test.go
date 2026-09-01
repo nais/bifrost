@@ -34,8 +34,8 @@ func testConfig() *config.Config {
 			InstanceAPIIngressHost:      "api.example",
 			InstanceAPIIngressClass:     "api-class",
 			InstanceWebOAuthJWTAudience: "aud",
-			NaisApiAddress:              "teams.example:3001",
-			NaisApiNamespace:            "teams",
+			NaisApiAddress:              "nais-api.nais-system:3001",
+			NaisApiNamespace:            "nais-system",
 		},
 	}
 }

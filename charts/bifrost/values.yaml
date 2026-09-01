@@ -115,8 +115,8 @@ backend:
     # webOAuthJWTAudience: # mapped in fasit
 
     # Nais API gRPC endpoint for team authorization
-    naisApiAddress: nais-api.nais:3001
-    naisApiNamespace: nais
+    naisApiAddress: nais-api.nais-system:3001
+    naisApiNamespace: nais-system
 
     # Default release channel for new instances (optional)
     # Set via Fasit per environment once ReleaseChannel CRDs are available
