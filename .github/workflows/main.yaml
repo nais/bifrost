@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-and-deploy:
-    uses: nais/actions/.github/workflows/mise-build-deploy-fasit.yaml@e6eeb636a4e6274711288cbec3c22f43a3db8600 # ratchet:nais/actions/.github/workflows/mise-build-deploy-fasit.yaml@main
+    uses: nais/actions/.github/workflows/mise-build-deploy-fasit.yaml@22a5e1a8a2a905e7bf626114d6b4cc37358a0737 # ratchet:nais/actions/.github/workflows/mise-build-deploy-fasit.yaml@main
     secrets:
       NAIS_IO_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.NAIS_IO_WORKLOAD_IDENTITY_PROVIDER }}
     with:

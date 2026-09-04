@@ -1,7 +1,7 @@
 ---
 # The values chart-testing installs the chart with. They are the shape a GCP
 # management cluster gets from fasit, filled in with usable test values rather
-# than placeholders: bifrost validates 14 required variables at startup and
+# than placeholders: bifrost validates 13 required variables at startup and
 # refuses an empty or whitespace-padded namespace, so a placeholder that only
 # looks non-empty would be caught by the very check this test exists to run.
 
@@ -63,8 +63,8 @@ backend:
     apiIngressHost: unleash-api.chart-testing.example.com
     webOAuthJWTAudience: chart-testing-oauth-client-id
 
-    teamsApiUrl: https://console.chart-testing.example.com/graphql
-    teamsApiToken: chart-testing-teams-api-token
+    naisApiAddress: nais-api.nais-system:3001
+    naisApiNamespace: nais-system
 
 networkPolicy:
   enabled: true

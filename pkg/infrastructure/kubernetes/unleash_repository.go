@@ -3,7 +3,6 @@ package kubernetes
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -395,11 +394,6 @@ func (r *UnleashRepository) getUnleashCRD(ctx context.Context, name string) (*un
 // FQDN Network Policy operations
 
 func (r *UnleashRepository) createFQDNNetworkPolicy(ctx context.Context, name string) (bool, error) {
-	u, err := url.Parse(r.config.Unleash.TeamsApiURL)
-	if err != nil {
-		return false, fmt.Errorf("failed to parse teams API URL: %w", err)
-	}
-
 	protocolTCP := corev1.ProtocolTCP
 	fqdn := fqdnV1alpha3.FQDNNetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -434,7 +428,6 @@ func (r *UnleashRepository) createFQDNNetworkPolicy(ctx context.Context, name st
 								"www.gstatic.com",
 								"hooks.slack.com",
 								"auth.nais.io",
-								u.Host,
 							},
 						},
 					},
@@ -482,12 +475,6 @@ func (r *UnleashRepository) updateFQDNNetworkPolicy(ctx context.Context, name st
 		return err
 	}
 
-	// Parse teams API URL
-	u, err := url.Parse(r.config.Unleash.TeamsApiURL)
-	if err != nil {
-		return fmt.Errorf("failed to parse teams API URL: %w", err)
-	}
-
 	// Build new policy inline
 	protocolTCP := corev1.ProtocolTCP
 	fqdnNew := fqdnV1alpha3.FQDNNetworkPolicy{
@@ -523,7 +510,6 @@ func (r *UnleashRepository) updateFQDNNetworkPolicy(ctx context.Context, name st
 								"www.gstatic.com",
 								"hooks.slack.com",
 								"auth.nais.io",
-								u.Host,
 							},
 						},
 					},
@@ -652,6 +638,8 @@ func getEnvVar(crd *unleashv1.Unleash, name, defaultValue string) string {
 func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 	cloudSqlProto := corev1.ProtocolTCP
 	cloudSqlPort := intstr.FromInt(3307)
+	grpcProto := corev1.ProtocolTCP
+	grpcPort := intstr.FromInt(3001)
 
 	// Mint a nonce on first create and write it back to cfg, not just into the
 	// spec. stampManagedMetadata records cfg as the desired-state annotation, so
@@ -726,6 +714,19 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 							},
 						}},
 					},
+					{
+						Ports: []networkingv1.NetworkPolicyPort{{
+							Protocol: &grpcProto,
+							Port:     &grpcPort,
+						}},
+						To: []networkingv1.NetworkPolicyPeer{{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": c.Unleash.NaisApiNamespace,
+								},
+							},
+						}},
+					},
 				},
 			},
 			Federation: unleashv1.UnleashFederationConfig{
@@ -744,19 +745,8 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 					Value: "true",
 				},
 				{
-					Name:  "TEAMS_API_URL",
-					Value: c.Unleash.TeamsApiURL,
-				},
-				{
-					Name: "TEAMS_API_TOKEN",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: c.Unleash.TeamsApiSecretName,
-							},
-							Key: c.Unleash.TeamsApiSecretTokenKey,
-						},
-					},
+					Name:  "NAIS_API_ADDRESS",
+					Value: c.Unleash.NaisApiAddress,
 				},
 				{
 					Name:  "TEAMS_ALLOWED_TEAMS",

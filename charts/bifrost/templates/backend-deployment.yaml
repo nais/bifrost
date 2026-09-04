@@ -95,12 +95,10 @@ spec:
               value: {{ .Values.backend.unleash.apiIngressHost | required ".unleash.apiIngressHost is required" | quote }}
             - name: BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE
               value: {{ .Values.backend.unleash.webOAuthJWTAudience | required ".unleash.webOAuthJWTAudience is required" | quote }}
-            - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL
-              value: {{ .Values.backend.unleash.teamsApiUrl | required ".unleash.teamsApiUrl is required" | quote }}
-            - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME
-              value: {{ .Values.backend.unleash.teamsApiTokenSecretName | required ".unleash.teamsApiTokenSecretName is required" | quote }}
-            - name: BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY
-              value: {{ .Values.backend.unleash.teamsApiTokenSecretKey | required ".unleash.teamsApiTokenSecretKey is required" | quote }}
+            - name: BIFROST_UNLEASH_INSTANCE_NAIS_API_ADDRESS
+              value: {{ .Values.backend.unleash.naisApiAddress | required ".unleash.naisApiAddress is required" | quote }}
+            - name: BIFROST_UNLEASH_INSTANCE_NAIS_API_NAMESPACE
+              value: {{ .Values.backend.unleash.naisApiNamespace | required ".unleash.naisApiNamespace is required" | quote }}
             {{- if .Values.backend.unleash.defaultReleaseChannel }}
             - name: BIFROST_UNLEASH_DEFAULT_RELEASE_CHANNEL
               value: {{ .Values.backend.unleash.defaultReleaseChannel | quote }}

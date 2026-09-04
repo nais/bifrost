@@ -82,9 +82,8 @@ func validConfig() *Config {
 			InstanceWebOAuthJWTAudience: "audience",
 			InstanceAPIIngressHost:      "unleash-api.example",
 			InstanceAPIIngressClass:     "internal-haproxy",
-			TeamsApiURL:                 "https://console.example/graphql",
-			TeamsApiSecretName:          "teams-api",
-			TeamsApiSecretTokenKey:      "token",
+			NaisApiAddress:              "nais-api.nais-system:3001",
+			NaisApiNamespace:            "nais-system",
 		},
 	}
 }
@@ -128,8 +127,8 @@ func setEnvField(t *testing.T, v reflect.Value, env, value string) {
 // the point: every required field, blanked, has to be refused by name.
 func TestValidate_AuditsEveryRequiredField(t *testing.T) {
 	names := requiredEnvNames(reflect.TypeOf(Config{}))
-	if len(names) < 14 {
-		t.Fatalf("found %d required fields (%v), want at least the 14 that exist; the walk is not finding them", len(names), names)
+	if len(names) < 13 {
+		t.Fatalf("found %d required fields (%v), want at least the 13 that exist; the walk is not finding them", len(names), names)
 	}
 
 	for _, env := range names {
@@ -215,9 +214,8 @@ func TestNew_RefusesAnInvalidConfiguration(t *testing.T) {
 		"BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE=audience",
 		"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST=api.example",
 		"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS=api-class",
-		"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL=https://console.example/graphql",
-		"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME=teams-api",
-		"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY=token",
+		"BIFROST_UNLEASH_INSTANCE_NAIS_API_ADDRESS=nais-api.nais-system:3001",
+		"BIFROST_UNLEASH_INSTANCE_NAIS_API_NAMESPACE=nais-system",
 	)
 
 	out, err := cmd.CombinedOutput()

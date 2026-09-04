@@ -106,10 +106,9 @@ type UnleashConfig struct {
 	InstanceWebOAuthJWTAudience string `env:"BIFROST_UNLEASH_INSTANCE_WEB_OAUTH_JWT_AUDIENCE,required"`
 	InstanceAPIIngressHost      string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST,required"`
 	InstanceAPIIngressClass     string `env:"BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS,required"`
-	TeamsApiURL                 string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_URL,required"`
-	TeamsApiSecretName          string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_SECRET_NAME,required"`
-	TeamsApiSecretTokenKey      string `env:"BIFROST_UNLEASH_INSTANCE_TEAMS_API_TOKEN_SECRET_KEY,required"`
 	DefaultReleaseChannel       string `env:"BIFROST_UNLEASH_DEFAULT_RELEASE_CHANNEL"`
+	NaisApiAddress              string `env:"BIFROST_UNLEASH_INSTANCE_NAIS_API_ADDRESS,required"`
+	NaisApiNamespace            string `env:"BIFROST_UNLEASH_INSTANCE_NAIS_API_NAMESPACE,required"`
 
 	// Migration settings for transitioning custom versions to release channels
 	MigrationEnabled       bool          `env:"BIFROST_UNLEASH_MIGRATION_ENABLED,default=false"`

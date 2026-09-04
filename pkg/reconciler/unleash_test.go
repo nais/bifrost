@@ -34,9 +34,8 @@ func testConfig() *config.Config {
 			InstanceAPIIngressHost:      "api.example",
 			InstanceAPIIngressClass:     "api-class",
 			InstanceWebOAuthJWTAudience: "aud",
-			TeamsApiURL:                 "https://teams.example",
-			TeamsApiSecretName:          "teams",
-			TeamsApiSecretTokenKey:      "token",
+			NaisApiAddress:              "nais-api.nais-system:3001",
+			NaisApiNamespace:            "nais-system",
 		},
 	}
 }
