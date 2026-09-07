@@ -43,10 +43,10 @@ values:
       template: 'true'
     config:
       type: bool
-  # Reconciler rollout, in order: enabled+dryRun -> +autoAdopt -> -autoAdopt -> -dryRun.
+  # Reconciler rollout completed: enabled with writes allowed; automatic adoption remains off.
   #
-  # enabled and dryRun default on together, so every tenant runs the loop in
-  # observe mode. That costs one namespace List per resync and writes nothing.
+  # enabled defaults on for every tenant. Recorded desired state is converged on
+  # each resync; legacy instances without that intent remain untouched.
   # It is deliberately a default rather than a per-environment opt-in: nothing
   # exports whether the reconciler is enabled, so while tenants differ, a zero
   # bifrost_reconciler_instances_updated_timestamp_seconds is ambiguous between
@@ -56,7 +56,7 @@ values:
   backend.reconciler.enabled:
     displayName: Enable the Unleash reconcile loop
     description: >-
-      On by default in observe mode. A tenant with no Unleash instances is expected to report
+      On by default. A tenant with no Unleash instances is expected to report
       managed=0, unmanaged=0 with a non-zero census timestamp — that reads as "measured and empty",
       not as "not running". See docs/RECONCILER_RUNBOOK.md.
     computed:
@@ -65,16 +65,15 @@ values:
       type: bool
   backend.reconciler.dryRun:
     displayName: Reconciler dry-run (observe only, no writes)
-    description: Must stay on while adoption is on — bifrost refuses to start with both adoption enabled and dry-run off. Turn off last, once adoption is off again.
+    description: Off by default after fleet observation. Bifrost converges only instances with recorded desired-state intent, and refuses to start if automatic adoption is enabled.
     computed:
-      template: 'true'
+      template: 'false'
     config:
       type: bool
   backend.reconciler.autoAdopt:
     displayName: Adopt unlabelled Unleash instances in bifrost's namespace
     description: >-
-      Off by default after the adoption phase. Keep dry-run enabled and inspect
-      bifrost_reconciler_actions_total before allowing convergence writes. Re-enable only to adopt a newly
+      Off by default after the adoption phase. Re-enable only to adopt a newly
       identified legacy instance. Adoption stamps only the managed-by label, never the desired-state annotation.
     computed:
       template: 'false'
