@@ -62,6 +62,25 @@ func NewChannelReconciler(
 	}
 }
 
+// Recover continuously resumes persisted transactions without admitting new
+// candidates. It retries transient Kubernetes failures with bounded backoff.
+func (r *ChannelReconciler) Recover(ctx context.Context) {
+	delay := r.pollInterval
+	maxDelay := time.Minute
+
+	for ctx.Err() == nil {
+		if err := r.recoverTransactions(ctx); err != nil {
+			r.logger.WithError(err).Error("Failed to list instances for channel migration recovery")
+			delay = min(delay*2, maxDelay)
+		} else {
+			delay = r.pollInterval
+		}
+		if !sleepWithContext(ctx, delay) {
+			return
+		}
+	}
+}
+
 // Start recovers every persisted transaction before admitting a bounded number
 // of new migrations. Recovery runs even when new admission is disabled.
 func (r *ChannelReconciler) Start(ctx context.Context) {
@@ -72,25 +91,9 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 	}
 	sort.Slice(crds, func(i, j int) bool { return crds[i].Name < crds[j].Name })
 
-	withTransaction := make(map[string]bool)
-	for i := range crds {
-		raw := crds[i].GetAnnotations()[channelMigrationAnnotation]
-		if raw == "" {
-			continue
-		}
-		withTransaction[crds[i].Name] = true
-		if _, err := unmarshalChannelMigrationTransaction(raw); err != nil {
-			recordChannelMigrationEvent(channelEventInvalidTransaction)
-			r.logger.WithError(err).WithField("instance", crds[i].Name).
-				Error("Invalid persisted channel migration transaction; manual intervention required")
-			continue
-		}
-
-		recordChannelMigrationEvent(channelEventResumed)
-		r.resumeTransaction(ctx, crds[i].Name)
-		if ctx.Err() != nil {
-			return
-		}
+	withTransaction := r.recoverTransactionsFromCRDs(ctx, crds)
+	if ctx.Err() != nil {
+		return
 	}
 
 	if !r.config.Unleash.ChannelMigrationEnabled {
@@ -156,10 +159,48 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 	}
 }
 
+func (r *ChannelReconciler) recoverTransactions(ctx context.Context) error {
+	crds, err := r.unleashRepo.ListCRDs(ctx, false)
+	if err != nil {
+		return err
+	}
+	sort.Slice(crds, func(i, j int) bool { return crds[i].Name < crds[j].Name })
+	r.recoverTransactionsFromCRDs(ctx, crds)
+	return ctx.Err()
+}
+
+func (r *ChannelReconciler) recoverTransactionsFromCRDs(ctx context.Context, crds []unleashv1.Unleash) map[string]bool {
+	withTransaction := make(map[string]bool)
+	for i := range crds {
+		raw := crds[i].GetAnnotations()[channelMigrationAnnotation]
+		if raw == "" {
+			continue
+		}
+		withTransaction[crds[i].Name] = true
+		if _, err := unmarshalChannelMigrationTransaction(raw); err != nil {
+			recordChannelMigrationEvent(channelEventInvalidTransaction)
+			r.logger.WithError(err).WithField("instance", crds[i].Name).
+				Error("Invalid persisted channel migration transaction; manual intervention required")
+			continue
+		}
+
+		recordChannelMigrationEvent(channelEventResumed)
+		r.resumeTransaction(ctx, crds[i].Name)
+		if ctx.Err() != nil {
+			return withTransaction
+		}
+	}
+	return withTransaction
+}
+
 func (r *ChannelReconciler) validateChannelMap(ctx context.Context, channelMap map[string]string) error {
 	for source, target := range channelMap {
-		if _, err := r.releaseChannelRepo.Get(ctx, source); err != nil {
+		sourceChannel, err := r.releaseChannelRepo.Get(ctx, source)
+		if err != nil {
 			return fmt.Errorf("source channel %q: %w", source, err)
+		}
+		if sourceChannel.UID == "" || sourceChannel.Image == "" {
+			return fmt.Errorf("source channel %q has no UID or image to pin", source)
 		}
 		targetChannel, err := r.releaseChannelRepo.Get(ctx, target)
 		if err != nil {
@@ -241,6 +282,13 @@ func (r *ChannelReconciler) admitTransaction(ctx context.Context, name, sourceCh
 			return ownershipError("current desired-state intent is no longer on the configured source channel")
 		}
 
+		sourceChannel, err := r.releaseChannelRepo.Get(ctx, sourceChannelName)
+		if err != nil {
+			return err
+		}
+		if sourceChannel.UID == "" || sourceChannel.Image == "" {
+			return fmt.Errorf("source channel %q has no UID or image to pin", sourceChannelName)
+		}
 		targetChannel, err := r.releaseChannelRepo.Get(ctx, targetChannelName)
 		if err != nil {
 			return err
@@ -259,6 +307,8 @@ func (r *ChannelReconciler) admitTransaction(ctx context.Context, name, sourceCh
 			Phase:                        phasePrepared,
 			Deadline:                     r.now().UTC().Add(r.config.Unleash.ChannelMigrationHealthTimeout),
 			SourceChannel:                sourceIntent.ReleaseChannelName,
+			SourceChannelUID:             sourceChannel.UID,
+			SourceImage:                  sourceChannel.Image,
 			TargetChannel:                targetChannelName,
 			TargetChannelUID:             targetChannel.UID,
 			TargetImage:                  targetChannel.Image,
@@ -448,6 +498,12 @@ func (r *ChannelReconciler) ensureRollbackWritten(ctx context.Context, name stri
 		if !r.now().Before(transaction.Deadline) {
 			return r.markManualRecovery(ctx, name, failureRollbackTimeout)
 		}
+		if err := r.checkPinnedSource(ctx, transaction); err != nil {
+			if errors.Is(err, errSourceChannelChanged) || apierrors.IsNotFound(err) {
+				return r.markManualRecovery(ctx, name, failureSourceChannelChanged)
+			}
+			return err
+		}
 
 		switch {
 		case state.intentHash == transaction.DesiredStateIntentHash &&
@@ -506,6 +562,12 @@ func (r *ChannelReconciler) ensureRollbackHealthy(ctx context.Context, name stri
 	)
 	switch {
 	case err == nil:
+		if err := r.checkPinnedSource(ctx, state.transaction); err != nil {
+			if errors.Is(err, errSourceChannelChanged) || apierrors.IsNotFound(err) {
+				return r.markManualRecovery(ctx, name, failureSourceChannelChanged)
+			}
+			return err
+		}
 		if err := r.transition(ctx, name, []channelMigrationPhase{phaseRollbackWritten}, phaseRolledBack,
 			[]string{state.transaction.DesiredStateIntentHash}, time.Time{}, ""); err != nil {
 			return err
@@ -555,7 +617,8 @@ func (r *ChannelReconciler) waitForTransactionHealthy(
 				}
 			} else if instance, getErr := r.unleashRepo.Get(ctx, name); getErr == nil &&
 				instance.IsReady &&
-				instance.ChannelNameFromStatus == state.transaction.SourceChannel {
+				instance.ChannelNameFromStatus == state.transaction.SourceChannel &&
+				instance.ResolvedImage == state.transaction.SourceImage {
 				return nil
 			}
 		} else if isOwnershipError(err) {
@@ -613,6 +676,17 @@ func (r *ChannelReconciler) checkPinnedTarget(ctx context.Context, transaction *
 	}
 	if channel.UID != transaction.TargetChannelUID || channel.Image != transaction.TargetImage {
 		return errTargetChannelChanged
+	}
+	return nil
+}
+
+func (r *ChannelReconciler) checkPinnedSource(ctx context.Context, transaction *channelMigrationTransaction) error {
+	channel, err := r.releaseChannelRepo.Get(ctx, transaction.SourceChannel)
+	if err != nil {
+		return err
+	}
+	if channel.UID != transaction.SourceChannelUID || channel.Image != transaction.SourceImage {
+		return errSourceChannelChanged
 	}
 	return nil
 }

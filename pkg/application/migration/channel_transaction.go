@@ -16,7 +16,7 @@ import (
 
 const (
 	channelMigrationAnnotation    = kubernetes.AnnotationChannelMigration
-	channelTransactionSchema      = 1
+	channelTransactionSchema      = 2
 	maxTransactionFailureReason   = 120
 	targetWriteRetries            = 3
 	transactionAnnotationRetries  = 3
@@ -24,6 +24,7 @@ const (
 	failureTargetWrite            = "target_write_failed"
 	failureTargetTimeout          = "target_health_timeout"
 	failureTargetChannelChanged   = "target_channel_changed"
+	failureSourceChannelChanged   = "source_channel_changed"
 	failureSourceUnhealthy        = "source_unhealthy"
 	failureRollbackWrite          = "rollback_write_failed"
 	failureRollbackTimeout        = "rollback_health_timeout"
@@ -45,6 +46,7 @@ const (
 
 var (
 	errTargetChannelChanged = errors.New("pinned target channel changed")
+	errSourceChannelChanged = errors.New("pinned source channel changed")
 	errTransactionTimeout   = errors.New("channel migration transaction deadline exceeded")
 )
 
@@ -54,6 +56,8 @@ type channelMigrationTransaction struct {
 	Phase                        channelMigrationPhase `json:"phase"`
 	Deadline                     time.Time             `json:"deadline"`
 	SourceChannel                string                `json:"sourceChannel"`
+	SourceChannelUID             types.UID             `json:"sourceChannelUid"`
+	SourceImage                  string                `json:"sourceImage"`
 	TargetChannel                string                `json:"targetChannel"`
 	TargetChannelUID             types.UID             `json:"targetChannelUid"`
 	TargetImage                  string                `json:"targetImage"`
@@ -74,6 +78,9 @@ func (t *channelMigrationTransaction) validate() error {
 	}
 	if t.SourceChannel == "" || t.TargetChannel == "" || t.SourceChannel == t.TargetChannel {
 		return errors.New("channel migration transaction has invalid source or target channel")
+	}
+	if t.SourceChannelUID == "" || t.SourceImage == "" {
+		return errors.New("channel migration transaction has no pinned source channel UID or image")
 	}
 	if t.TargetChannelUID == "" || t.TargetImage == "" {
 		return errors.New("channel migration transaction has no pinned target channel UID or image")

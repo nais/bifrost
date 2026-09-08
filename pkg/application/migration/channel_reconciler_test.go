@@ -47,6 +47,8 @@ func TestChannelMigrationTransactionRequiresKnownVersionAndUID(t *testing.T) {
 		Phase:                        phasePrepared,
 		Deadline:                     time.Now().UTC().Add(time.Minute),
 		SourceChannel:                "stable-v6",
+		SourceChannelUID:             "source-channel-uid",
+		SourceImage:                  "unleash/unleash-server:6.4.0",
 		TargetChannel:                "stable-v7",
 		TargetChannelUID:             "channel-uid",
 		TargetImage:                  "unleash/unleash-server:7.6.5",
@@ -125,6 +127,8 @@ func TestChannelReconcilerPersistsPinnedCompletedTransactionAndPreservesObjectSt
 	assert.Equal(t, phaseCompleted, transaction.Phase)
 	assert.Equal(t, types.UID("uid-team-a"), transaction.ResourceUID)
 	assert.Equal(t, "stable-v6", transaction.SourceChannel)
+	assert.Equal(t, types.UID("uid-stable-v6"), transaction.SourceChannelUID)
+	assert.Equal(t, "unleash/unleash-server:6.4.0", transaction.SourceImage)
 	assert.Equal(t, "stable-v7", transaction.TargetChannel)
 	assert.Equal(t, types.UID("uid-stable-v7"), transaction.TargetChannelUID)
 	assert.Equal(t, "unleash/unleash-server:7.6.5", transaction.TargetImage)
@@ -156,6 +160,62 @@ func TestChannelReconcilerResumesPreparedTransactionAfterTargetWrite(t *testing.
 
 	assert.Equal(t, phaseCompleted, mustTransaction(t, repo, "team-a").Phase)
 	assert.Zero(t, repo.updateAttempts, "recovery must recognize the already-written target intent")
+}
+
+func TestChannelReconcilerRecoveryRetriesTransientFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		setFailure func(*MockUnleashRepository)
+		clear      func(*MockUnleashRepository)
+	}{
+		{
+			name: "list failure",
+			setFailure: func(repo *MockUnleashRepository) {
+				repo.listErr = errors.New("temporary list failure")
+			},
+			clear: func(repo *MockUnleashRepository) {
+				repo.listErr = nil
+			},
+		},
+		{
+			name: "transaction read failure",
+			setFailure: func(repo *MockUnleashRepository) {
+				repo.getCRDErr = errors.New("temporary read failure")
+			},
+			clear: func(repo *MockUnleashRepository) {
+				repo.getCRDErr = nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := NewMockUnleashRepository()
+			repo.AddInstance("team-a", "", "stable-v6", true)
+			repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
+			channels := channelTestChannels()
+			installTransaction(t, repo, channels, "team-a", phasePrepared, time.Now().Add(time.Minute))
+
+			repo.mu.Lock()
+			test.setFailure(repo)
+			repo.mu.Unlock()
+
+			reconciler := newChannelTestReconciler(repo, channels, newChannelTestConfig(false, "", time.Second))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go reconciler.Recover(ctx)
+
+			time.Sleep(10 * time.Millisecond)
+			repo.mu.Lock()
+			test.clear(repo)
+			repo.mu.Unlock()
+
+			require.Eventually(t, func() bool {
+				transaction, err := transactionFromRepo(repo, "team-a")
+				return err == nil && transaction.Phase == phaseCompleted
+			}, time.Second, 5*time.Millisecond)
+		})
+	}
 }
 
 func TestChannelReconcilerRequiresManualRecoveryOnTargetTimeoutByDefault(t *testing.T) {
@@ -203,6 +263,60 @@ func TestChannelReconcilerRollsBackOnlyWithExplicitSafeConfiguration(t *testing.
 	assert.Equal(t, phaseRolledBack, transaction.Phase)
 	assert.Equal(t, "stable-v6", mustInstance(t, repo, "team-a").ReleaseChannelName)
 	assert.Equal(t, 2, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRequiresManualRecoveryWhenPinnedSourceChangesBeforeRollback(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseTargetWritten, time.Now().Add(25*time.Millisecond))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
+	cfg := newChannelTestConfig(false, "", 25*time.Millisecond)
+	cfg.Unleash.ChannelMigrationRollbackSafe = true
+	channels.channels["stable-v6"].Image = "unleash/unleash-server:6.5.0"
+
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureSourceChannelChanged, transaction.FailureReason)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Zero(t, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRequiresManualRecoveryWhenPinnedSourceIsRecreatedBeforeRollback(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseTargetWritten, time.Now().Add(25*time.Millisecond))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
+	cfg := newChannelTestConfig(false, "", 25*time.Millisecond)
+	cfg.Unleash.ChannelMigrationRollbackSafe = true
+	channels.channels["stable-v6"].UID = "replacement-source-uid"
+
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureSourceChannelChanged, transaction.FailureReason)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Zero(t, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRequiresPinnedSourceImageBeforeCompletingRollback(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.SetReadyOnChannel("team-a", "stable-v6", "unleash/unleash-server:6.4.0")
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseRollbackWritten, time.Now().Add(time.Minute))
+	channels.channels["stable-v6"].Image = "unleash/unleash-server:6.5.0"
+
+	cfg := newChannelTestConfig(false, "", time.Second)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureSourceChannelChanged, transaction.FailureReason)
 }
 
 func TestChannelReconcilerNeverRollsBackWithCanceledContext(t *testing.T) {
@@ -412,12 +526,15 @@ func installTransaction(
 	_, targetHash, err := targetIntent(source, "stable-v7")
 	require.NoError(t, err)
 	target := channels.channels["stable-v7"]
+	sourceChannel := channels.channels[source.ReleaseChannelName]
 	transaction := &channelMigrationTransaction{
 		SchemaVersion:                channelTransactionSchema,
 		ResourceUID:                  crd.UID,
 		Phase:                        phase,
 		Deadline:                     deadline.UTC(),
 		SourceChannel:                source.ReleaseChannelName,
+		SourceChannelUID:             sourceChannel.UID,
+		SourceImage:                  sourceChannel.Image,
 		TargetChannel:                target.Name,
 		TargetChannelUID:             target.UID,
 		TargetImage:                  target.Image,
