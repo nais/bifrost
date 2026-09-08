@@ -77,6 +77,17 @@ spec:
       # 0, which is "no census has ever completed" — the case a `> 0` guard
       # would silently exclude, and the one that matters most.
 {{- if .Values.backend.reconciler.enabled }}
+      - alert: BifrostReconcilerMetricsAbsent
+        expr: absent(bifrost_reconciler_instances_updated_timestamp_seconds{namespace="{{ .Release.Namespace }}"}) == 1
+        for: 10m
+        labels:
+          severity: critical
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost reconciler metrics are absent"
+          consequence: "The reconciler may be unavailable and its census-stalled alert cannot evaluate."
+          action: "Check the bifrost-backend workload, Prometheus scrape status, and backend metrics endpoint."
+
       - alert: BifrostReconcilerCensusStalled
         expr: (time() - bifrost_reconciler_instances_updated_timestamp_seconds) > 1800
         for: 10m
@@ -103,6 +114,36 @@ spec:
           summary: "The bifrost reconciler is failing to reconcile instances"
           consequence: "Affected instances are not converging to their configuration, and an instance failing on intent_error has dropped out of the managed set without changing any other metric."
           action: "Break down by reason: sum by (action, reason) (bifrost_reconciler_actions_total). See docs/RECONCILER_RUNBOOK.md."
+
+      - alert: BifrostReconcilerNotConverging
+        expr: |
+          max(bifrost_reconciler_managed_instances) > 0
+          and
+          sum(increase(bifrost_reconciler_actions_total{action="changed"}[30m]))
+            >= 3 * max(bifrost_reconciler_managed_instances)
+        for: 10m
+        labels:
+          severity: critical
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost repeatedly changes managed Unleash instances without converging"
+          consequence: "Repeated reconciliation writes can cause continuous workload rollouts."
+          action: "Inspect reconciler action reasons and the desired-state annotation for affected instances. Disable the reconciler for the tenant if writes must stop."
+
+      - alert: BifrostReconcilerInstanceLoopInactive
+        expr: |
+          max(bifrost_reconciler_managed_instances) > 0
+          and
+          sum(increase(bifrost_reconciler_actions_total{action!="skipped"}[30m]))
+            < max(bifrost_reconciler_managed_instances)
+        for: 10m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost census runs but managed instances are not being reconciled"
+          consequence: "A managed instance may no longer receive desired-state convergence."
+          action: "Check controller-runtime logs and reconcile action metrics by reason."
 
       # Adoption paces itself at one instance per resync and stops entirely if
       # the instance it stamped last goes bad, so this is the state that needs a
