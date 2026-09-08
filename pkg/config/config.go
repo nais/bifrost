@@ -116,12 +116,19 @@ type UnleashConfig struct {
 	MigrationHealthTimeout time.Duration `env:"BIFROST_UNLEASH_MIGRATION_HEALTH_TIMEOUT,default=5m"`
 	MigrationDelay         time.Duration `env:"BIFROST_UNLEASH_MIGRATION_DELAY,default=30s"`
 
-	// Channel migration settings for transitioning between release channels (e.g., v5 to v6)
-	// ChannelMigrationMap is a comma-separated list of source:target pairs, e.g. "stable-v5:stable-v6,rapid-v5:rapid-v6"
+	// Channel migration settings for transitioning between release channels (e.g., v6 to v7)
+	// ChannelMigrationMap is a comma-separated list of source:target pairs, e.g. "stable-v6:stable-v7,rapid-v6:rapid-v7"
 	ChannelMigrationEnabled       bool          `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED,default=false"`
 	ChannelMigrationMap           string        `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_MAP"`
 	ChannelMigrationHealthTimeout time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_HEALTH_TIMEOUT,default=5m"`
 	ChannelMigrationDelay         time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY,default=30s"`
+	// ChannelMigrationMaxCandidates caps new transaction admission per process
+	// start. Recovery of already-persisted transactions is never capped.
+	ChannelMigrationMaxCandidates int `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_MAX_CANDIDATES,default=1"`
+	// ChannelMigrationRollbackSafe is an explicit operator assertion that the
+	// target-to-source database downgrade is safe. It defaults false because a
+	// v7 database may not be readable by v6.
+	ChannelMigrationRollbackSafe bool `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_ROLLBACK_SAFE,default=false"`
 }
 
 // ParseChannelMigrationMap parses the ChannelMigrationMap string into a map of source→target channel pairs.
@@ -267,6 +274,16 @@ func (c *Config) Validate() error {
 	// runs alongside a reconciler that cannot write at all.
 	if c.Reconciler.AutoAdopt && !c.Reconciler.DryRun {
 		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_DRY_RUN=true: adoption queues instances that carry no desired-state annotation, and converging one means rendering it from a lossy read-back of its own spec")
+	}
+
+	if c.Unleash.ChannelMigrationMaxCandidates < 0 {
+		return fmt.Errorf("BIFROST_UNLEASH_CHANNEL_MIGRATION_MAX_CANDIDATES must be zero or greater")
+	}
+	if c.Unleash.ChannelMigrationHealthTimeout <= 0 {
+		return fmt.Errorf("BIFROST_UNLEASH_CHANNEL_MIGRATION_HEALTH_TIMEOUT must be greater than zero")
+	}
+	if c.Unleash.ChannelMigrationDelay < 0 {
+		return fmt.Errorf("BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY must be zero or greater")
 	}
 
 	return nil

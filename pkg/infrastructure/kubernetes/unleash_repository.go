@@ -223,6 +223,7 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	// someone other than bifrost.
 	rendered := unleashNew.DeepCopy()
 	unleashNew.ObjectMeta = *unleashOld.ObjectMeta.DeepCopy()
+	unleashNew.Status = unleashOld.Status
 	ApplyManagedMetadata(&unleashNew, rendered)
 
 	if opts.ExpectedResourceVersion != "" {
@@ -253,6 +254,33 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 		r.logger.WithContext(ctx).WithFields(logFields).Info("Updated Unleash instance")
 	}
 
+	return nil
+}
+
+// PatchAnnotations applies annotation-only changes with an optimistic lock
+// against the exact object the caller validated.
+func (r *UnleashRepository) PatchAnnotations(ctx context.Context, crd *unleashv1.Unleash, changes map[string]*string) error {
+	if crd.GetResourceVersion() == "" {
+		return fmt.Errorf("cannot patch annotations for %s without resourceVersion", crd.GetName())
+	}
+
+	base := crd.DeepCopy()
+	updated := crd.DeepCopy()
+	if updated.Annotations == nil {
+		updated.Annotations = map[string]string{}
+	}
+	for key, value := range changes {
+		if value == nil {
+			delete(updated.Annotations, key)
+			continue
+		}
+		updated.Annotations[key] = *value
+	}
+
+	patch := ctrl.MergeFromWithOptions(base, ctrl.MergeFromWithOptimisticLock{})
+	if err := r.kubeClient.Patch(ctx, updated, patch); err != nil {
+		return fmt.Errorf("failed to patch unleash annotations: %w", err)
+	}
 	return nil
 }
 

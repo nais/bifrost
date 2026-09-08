@@ -5,6 +5,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Repository defines the interface for ReleaseChannel persistence operations
@@ -21,6 +22,10 @@ type Repository interface {
 type Channel struct {
 	// Name is the channel identifier (e.g., "stable", "rapid", "regular")
 	Name string
+
+	// UID binds a migration to the exact ReleaseChannel object that was
+	// reviewed, rather than another object later created under the same name.
+	UID types.UID
 
 	// Image is the full container image from spec.image (e.g., "quay.io/unleash/unleash-server:6.3.0")
 	Image string

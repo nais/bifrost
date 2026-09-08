@@ -22,6 +22,11 @@ const (
 	// LoadConfigFromCRD, which drops fields.
 	AnnotationDesiredState = "bifrost.nais.io/desired-state"
 
+	// AnnotationChannelMigration carries the Bifrost-owned, versioned channel
+	// migration transaction. The migration state machine updates it separately
+	// with annotation-only optimistic-lock patches.
+	AnnotationChannelMigration = "bifrost.nais.io/channel-migration"
+
 	// LabelAdopt opts an instance out of automatic adoption. It is a label
 	// rather than an annotation because the adopter's own List is label-scoped
 	// and because `kubectl get unleash -l bifrost.nais.io/adopt=false` is then
@@ -114,16 +119,14 @@ func IsManagedByBifrost(crd *unleashv1.Unleash) bool {
 	return crd.GetLabels()[LabelManagedBy] == ManagedByBifrost
 }
 
-// ApplyManagedMetadata copies bifrost's managed-by label and desired-state
-// annotation from a rendered CRD onto a live one, leaving every other metadata
-// field alone — finalizers, ownerReferences, and labels and annotations set by
-// anyone else.
+// ApplyManagedMetadata copies bifrost's rendered managed-by label and
+// desired-state annotation onto a live CRD. It leaves finalizers,
+// ownerReferences, foreign metadata, and the separately managed channel
+// migration transaction alone.
 //
-// This is the ownership rule for metadata on an Unleash CR: bifrost owns these
-// two keys and nothing else. Both write paths into the object have to agree on
-// it, or the outcome depends on which one wrote last — the reconciler's
-// applyManagedMetadata has the same semantics, and the repository's Update
-// reaches it through here.
+// Bifrost owns these rendered keys plus AnnotationChannelMigration. Both
+// rendered write paths have to agree on the first two, while the migration
+// state machine is the only writer of the transaction annotation.
 func ApplyManagedMetadata(live, rendered *unleashv1.Unleash) {
 	if live.Labels == nil {
 		live.Labels = map[string]string{}

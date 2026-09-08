@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	envconfig "github.com/sethvargo/go-envconfig"
 )
@@ -72,18 +73,19 @@ func validConfig() *Config {
 	return &Config{
 		Google: GoogleConfig{ProjectID: "nais-management"},
 		Unleash: UnleashConfig{
-			InstanceNamespace:           "bifrost-unleash",
-			InstanceServiceaccount:      "bifrost-unleash-sa",
-			SQLInstanceID:               "unleash-sql",
-			SQLInstanceRegion:           "europe-north1",
-			SQLInstanceAddress:          "10.0.0.1",
-			InstanceWebIngressHost:      "unleash-web.example",
-			InstanceWebIngressClass:     "external-fa-haproxy",
-			InstanceWebOAuthJWTAudience: "audience",
-			InstanceAPIIngressHost:      "unleash-api.example",
-			InstanceAPIIngressClass:     "internal-haproxy",
-			NaisApiAddress:              "nais-api.nais-system:3001",
-			NaisApiNamespace:            "nais-system",
+			InstanceNamespace:             "bifrost-unleash",
+			InstanceServiceaccount:        "bifrost-unleash-sa",
+			SQLInstanceID:                 "unleash-sql",
+			SQLInstanceRegion:             "europe-north1",
+			SQLInstanceAddress:            "10.0.0.1",
+			InstanceWebIngressHost:        "unleash-web.example",
+			InstanceWebIngressClass:       "external-fa-haproxy",
+			InstanceWebOAuthJWTAudience:   "audience",
+			InstanceAPIIngressHost:        "unleash-api.example",
+			InstanceAPIIngressClass:       "internal-haproxy",
+			NaisApiAddress:                "nais-api.nais-system:3001",
+			NaisApiNamespace:              "nais-system",
+			ChannelMigrationHealthTimeout: 5 * time.Minute,
 		},
 	}
 }
@@ -186,6 +188,44 @@ func TestValidate_RefusesAdoptionWithWritesEnabled(t *testing.T) {
 	c.Reconciler.DryRun = true
 	if err := c.Validate(); err != nil {
 		t.Errorf("Validate() = %v for autoAdopt with dry-run on, want nil", err)
+	}
+}
+
+func TestValidate_RejectsUnsafeChannelMigrationBounds(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		mut  func(*Config)
+	}{
+		{
+			name: "negative max candidates",
+			env:  "BIFROST_UNLEASH_CHANNEL_MIGRATION_MAX_CANDIDATES",
+			mut:  func(c *Config) { c.Unleash.ChannelMigrationMaxCandidates = -1 },
+		},
+		{
+			name: "zero health timeout",
+			env:  "BIFROST_UNLEASH_CHANNEL_MIGRATION_HEALTH_TIMEOUT",
+			mut:  func(c *Config) { c.Unleash.ChannelMigrationHealthTimeout = 0 },
+		},
+		{
+			name: "negative delay",
+			env:  "BIFROST_UNLEASH_CHANNEL_MIGRATION_DELAY",
+			mut:  func(c *Config) { c.Unleash.ChannelMigrationDelay = -time.Second },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig()
+			test.mut(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error naming %s", test.env)
+			}
+			if !strings.Contains(err.Error(), test.env) {
+				t.Errorf("Validate() error = %q, want it to name %s", err, test.env)
+			}
+		})
 	}
 }
 

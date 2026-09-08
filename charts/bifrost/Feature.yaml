@@ -109,11 +109,11 @@ values:
     config:
       type: string
   backend.unleash.channelMigration.enabled:
-    displayName: Enable channel-to-channel migration (e.g. v5 to v6)
+    displayName: Enable channel-to-channel migration (e.g. v6 to v7)
     config:
       type: bool
   backend.unleash.channelMigration.map:
-    displayName: "Channel migration map (e.g. stable-v5:stable-v6,rapid-v5:rapid-v6)"
+    displayName: "Channel migration map (e.g. stable-v6:stable-v7,rapid-v6:rapid-v7)"
     config:
       type: string
   backend.unleash.channelMigration.healthTimeout:
@@ -124,6 +124,16 @@ values:
     displayName: Delay between channel migrations (e.g. 30s)
     config:
       type: string
+  backend.unleash.channelMigration.maxCandidates:
+    displayName: Maximum new channel migrations admitted per Bifrost start
+    description: Existing persisted migration transactions are always recovered and do not count toward this limit. Zero disables new admissions.
+    config:
+      type: int
+  backend.unleash.channelMigration.rollbackSafe:
+    displayName: Allow automatic rollback to the source channel
+    description: Keep false unless target-to-source database downgrade is explicitly verified as safe.
+    config:
+      type: bool
   backend.unleash.googleServiceAccountEmail:
     displayName: Biforst unleash Google service account email
     computed:

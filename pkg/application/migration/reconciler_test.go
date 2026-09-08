@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,36 +11,52 @@ import (
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	"github.com/nais/bifrost/pkg/domain/unleash"
+	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // MockUnleashRepository implements unleash.Repository for testing
 type MockUnleashRepository struct {
-	mu               sync.Mutex
-	instances        map[string]*unleash.Instance
-	crds             map[string]*unleashv1.Unleash
-	listErr          error
-	getErr           error
-	getCRDErr        error
-	getCRDCallCount  int
-	getCRDFailAfterN int
-	updateErr        error
-	updateFailAfterN int
-	updateCalls      []string
-	readyAfter       map[string]int
-	getCounts        map[string]int
+	mu                sync.Mutex
+	instances         map[string]*unleash.Instance
+	crds              map[string]*unleashv1.Unleash
+	listErr           error
+	getErr            error
+	getCRDErr         error
+	getCRDCallCount   int
+	getCRDFailAfterN  int
+	updateErr         error
+	updateFailAfterN  int
+	updateCalls       []string
+	updateAttempts    int
+	updateOptions     []unleash.UpdateOptions
+	updateConflicts   int
+	conflictIntent    *unleash.Config
+	patchConflicts    int
+	patchAttempts     int
+	patchCalls        []string
+	transactionPhases []channelMigrationPhase
+	readyAfter        map[string]int
+	readyOnChannel    map[string]string
+	readyImage        map[string]string
+	getCounts         map[string]int
 }
 
 func NewMockUnleashRepository() *MockUnleashRepository {
 	return &MockUnleashRepository{
-		instances:  make(map[string]*unleash.Instance),
-		crds:       make(map[string]*unleashv1.Unleash),
-		readyAfter: make(map[string]int),
-		getCounts:  make(map[string]int),
+		instances:      make(map[string]*unleash.Instance),
+		crds:           make(map[string]*unleashv1.Unleash),
+		readyAfter:     make(map[string]int),
+		readyOnChannel: make(map[string]string),
+		readyImage:     make(map[string]string),
+		getCounts:      make(map[string]int),
 	}
 }
 
@@ -62,7 +79,21 @@ func (m *MockUnleashRepository) List(ctx context.Context, excludeChannelInstance
 }
 
 func (m *MockUnleashRepository) ListCRDs(ctx context.Context, excludeChannelInstances bool) ([]unleashv1.Unleash, error) {
-	return nil, nil // Not used in migration tests
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+
+	result := make([]unleashv1.Unleash, 0, len(m.crds))
+	for _, crd := range m.crds {
+		if excludeChannelInstances && crd.Spec.ReleaseChannel.Name != "" {
+			continue
+		}
+		result = append(result, *crd.DeepCopy())
+	}
+	return result, nil
 }
 
 func (m *MockUnleashRepository) Get(ctx context.Context, name string) (*unleash.Instance, error) {
@@ -87,8 +118,14 @@ func (m *MockUnleashRepository) Get(ctx context.Context, name string) (*unleash.
 			inst.IsReady = true
 		}
 	}
+	if channel, exists := m.readyOnChannel[name]; exists && inst.ReleaseChannelName == channel {
+		inst.IsReady = true
+		inst.ChannelNameFromStatus = channel
+		inst.ResolvedImage = m.readyImage[name]
+	}
 
-	return inst, nil
+	copy := *inst
+	return &copy, nil
 }
 
 func (m *MockUnleashRepository) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, error) {
@@ -107,7 +144,7 @@ func (m *MockUnleashRepository) GetCRD(ctx context.Context, name string) (*unlea
 	if !ok {
 		return nil, errors.New("CRD not found")
 	}
-	return crd, nil
+	return crd.DeepCopy(), nil
 }
 
 func (m *MockUnleashRepository) Create(ctx context.Context, cfg *unleash.Config) error {
@@ -117,6 +154,25 @@ func (m *MockUnleashRepository) Create(ctx context.Context, cfg *unleash.Config)
 func (m *MockUnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opts unleash.UpdateOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.updateAttempts++
+	m.updateOptions = append(m.updateOptions, opts)
+
+	crd, ok := m.crds[cfg.Name]
+	if !ok {
+		return errors.New("CRD not found")
+	}
+	if m.updateConflicts > 0 {
+		m.updateConflicts--
+		if m.conflictIntent != nil {
+			m.setIntentLocked(cfg.Name, m.conflictIntent)
+			m.conflictIntent = nil
+		}
+		return newMockConflict(cfg.Name)
+	}
+	if opts.ExpectedResourceVersion != "" && opts.ExpectedResourceVersion != crd.ResourceVersion {
+		return newMockConflict(cfg.Name)
+	}
 
 	if m.updateErr != nil {
 		if m.updateFailAfterN == 0 || len(m.updateCalls) >= m.updateFailAfterN {
@@ -137,16 +193,58 @@ func (m *MockUnleashRepository) Update(ctx context.Context, cfg *unleash.Config,
 	m.getCounts[cfg.Name] = 0
 
 	// Update the CRD
-	if crd, ok := m.crds[cfg.Name]; ok {
-		if cfg.CustomVersion != "" {
-			crd.Spec.CustomImage = "europe-north1-docker.pkg.dev/nais-io/nais/images/unleash-v4:" + cfg.CustomVersion
-			crd.Spec.ReleaseChannel.Name = ""
-		} else if cfg.ReleaseChannelName != "" {
-			crd.Spec.CustomImage = ""
-			crd.Spec.ReleaseChannel.Name = cfg.ReleaseChannelName
+	if cfg.CustomVersion != "" {
+		crd.Spec.CustomImage = "europe-north1-docker.pkg.dev/nais-io/nais/images/unleash-v4:" + cfg.CustomVersion
+		crd.Spec.ReleaseChannel.Name = ""
+	} else if cfg.ReleaseChannelName != "" {
+		crd.Spec.CustomImage = ""
+		crd.Spec.ReleaseChannel.Name = cfg.ReleaseChannelName
+	}
+	if raw, err := kubernetes.MarshalIntent(cfg); err == nil {
+		if crd.Annotations == nil {
+			crd.Annotations = map[string]string{}
+		}
+		crd.Annotations[kubernetes.AnnotationDesiredState] = raw
+	}
+	m.bumpResourceVersionLocked(cfg.Name)
+
+	return nil
+}
+
+func (m *MockUnleashRepository) PatchAnnotations(_ context.Context, read *unleashv1.Unleash, changes map[string]*string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.patchAttempts++
+	current, ok := m.crds[read.Name]
+	if !ok {
+		return errors.New("CRD not found")
+	}
+	if m.patchConflicts > 0 {
+		m.patchConflicts--
+		return newMockConflict(read.Name)
+	}
+	if read.ResourceVersion != current.ResourceVersion {
+		return newMockConflict(read.Name)
+	}
+	if current.Annotations == nil {
+		current.Annotations = map[string]string{}
+	}
+	for key, value := range changes {
+		if value == nil {
+			delete(current.Annotations, key)
+			continue
+		}
+		current.Annotations[key] = *value
+		if key == channelMigrationAnnotation {
+			transaction, err := unmarshalChannelMigrationTransaction(*value)
+			if err == nil {
+				m.transactionPhases = append(m.transactionPhases, transaction.Phase)
+			}
 		}
 	}
-
+	m.patchCalls = append(m.patchCalls, read.Name)
+	m.bumpResourceVersionLocked(read.Name)
 	return nil
 }
 
@@ -165,6 +263,7 @@ func (m *MockUnleashRepository) AddInstance(name, customVersion, releaseChannel 
 		ReleaseChannelName: releaseChannel,
 		IsReady:            isReady,
 		CreatedAt:          time.Now(),
+		ResourceVersion:    "1",
 	}
 
 	customImage := ""
@@ -172,10 +271,31 @@ func (m *MockUnleashRepository) AddInstance(name, customVersion, releaseChannel 
 		customImage = "europe-north1-docker.pkg.dev/nais-io/nais/images/unleash-v4:" + customVersion
 	}
 
+	intent := &unleash.Config{
+		Name:                      name,
+		CustomVersion:             customVersion,
+		ReleaseChannelName:        releaseChannel,
+		LogLevel:                  "warn",
+		DatabasePoolMax:           3,
+		DatabasePoolIdleTimeoutMs: 1000,
+	}
+	rawIntent, err := kubernetes.MarshalIntent(intent)
+	if err != nil {
+		panic(err)
+	}
+
 	m.crds[name] = &unleashv1.Unleash{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "unleash",
+			Name:            name,
+			Namespace:       "unleash",
+			UID:             types.UID("uid-" + name),
+			ResourceVersion: "1",
+			Labels: map[string]string{
+				kubernetes.LabelManagedBy: kubernetes.ManagedByBifrost,
+			},
+			Annotations: map[string]string{
+				kubernetes.AnnotationDesiredState: rawIntent,
+			},
 		},
 		Spec: unleashv1.UnleashSpec{
 			CustomImage: customImage,
@@ -190,6 +310,53 @@ func (m *MockUnleashRepository) SetReadyAfterNCalls(name string, n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.readyAfter[name] = n
+}
+
+func (m *MockUnleashRepository) SetReadyOnChannel(name, channel, image string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.readyOnChannel[name] = channel
+	m.readyImage[name] = image
+}
+
+func (m *MockUnleashRepository) SetConflictIntentOnNextUpdate(name string, cfg *unleash.Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateConflicts = 1
+	copy := *cfg
+	m.conflictIntent = &copy
+}
+
+func (m *MockUnleashRepository) setIntentLocked(name string, cfg *unleash.Config) {
+	crd := m.crds[name]
+	raw, err := kubernetes.MarshalIntent(cfg)
+	if err != nil {
+		panic(err)
+	}
+	crd.Annotations[kubernetes.AnnotationDesiredState] = raw
+	crd.Spec.CustomImage = ""
+	crd.Spec.ReleaseChannel.Name = cfg.ReleaseChannelName
+	instance := m.instances[name]
+	instance.CustomVersion = cfg.CustomVersion
+	instance.ReleaseChannelName = cfg.ReleaseChannelName
+	m.bumpResourceVersionLocked(name)
+}
+
+func (m *MockUnleashRepository) bumpResourceVersionLocked(name string) {
+	crd := m.crds[name]
+	var version int
+	_, _ = fmt.Sscanf(crd.ResourceVersion, "%d", &version)
+	version++
+	crd.ResourceVersion = fmt.Sprintf("%d", version)
+	m.instances[name].ResourceVersion = crd.ResourceVersion
+}
+
+func newMockConflict(name string) error {
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: "unleash.nais.io", Resource: "unleashes"},
+		name,
+		errors.New("conflict"),
+	)
 }
 
 // MockReleaseChannelRepository implements releasechannel.Repository for testing
@@ -227,6 +394,7 @@ func (m *MockReleaseChannelRepository) Get(ctx context.Context, name string) (*r
 func (m *MockReleaseChannelRepository) AddChannel(name, image string) {
 	m.channels[name] = &releasechannel.Channel{
 		Name:      name,
+		UID:       types.UID("uid-" + name),
 		Image:     image,
 		CreatedAt: time.Now(),
 	}

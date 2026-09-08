@@ -302,20 +302,18 @@ func Run(config *config.Config) {
 		logger.Info("Migration reconciler started in background")
 	}
 
-	if config.Unleash.ChannelMigrationEnabled {
-		var channelMigrationCtx context.Context
-		channelMigrationCtx, channelMigrationCancel = context.WithCancel(context.Background())
+	var channelMigrationCtx context.Context
+	channelMigrationCtx, channelMigrationCancel = context.WithCancel(context.Background())
 
-		channelReconciler := migration.NewChannelReconciler(
-			repo,
-			releaseChannelRepo,
-			config,
-			logger,
-		)
+	channelReconciler := migration.NewChannelReconciler(
+		repo,
+		releaseChannelRepo,
+		config,
+		logger,
+	)
 
-		go channelReconciler.Start(channelMigrationCtx)
-		logger.Info("Channel migration reconciler started in background")
-	}
+	go channelReconciler.Start(channelMigrationCtx)
+	logger.Info("Channel migration recovery started in background")
 
 	// Start the controller-runtime reconcile loop if enabled. It continuously
 	// converges bifrost-managed Unleash instances to their desired config.

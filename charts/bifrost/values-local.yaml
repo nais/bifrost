@@ -22,9 +22,11 @@ backend:
     # Channel migration example config (disabled by default)
     channelMigration:
       enabled: false
-      map: "stable-v5:stable-v6,rapid-v5:rapid-v6"
+      map: "stable-v6:stable-v7,rapid-v6:rapid-v7"
       healthTimeout: "5m"
       delay: "30s"
+      maxCandidates: 1
+      rollbackSafe: false
 
   google:
     projectId: foo
