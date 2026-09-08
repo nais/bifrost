@@ -118,13 +118,13 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 
 	candidates := r.newCandidates(crds, withTransaction, channelMap)
 	maxCandidates := r.config.Unleash.ChannelMigrationMaxCandidates
-	if len(candidates) > maxCandidates {
-		recordChannelMigrationEvent(channelEventCanaryLimited)
-		candidates = candidates[:maxCandidates]
-	}
-
-	for i, candidate := range candidates {
+	admitted := 0
+	for _, candidate := range candidates {
 		if ctx.Err() != nil {
+			return
+		}
+		if admitted >= maxCandidates {
+			recordChannelMigrationEvent(channelEventCanaryLimited)
 			return
 		}
 
@@ -145,9 +145,10 @@ func (r *ChannelReconciler) Start(ctx context.Context) {
 			r.logTransactionError(candidate.name, "Failed to admit channel migration transaction", err)
 			continue
 		}
+		admitted++
 		r.resumeTransaction(ctx, candidate.name)
 
-		if i < len(candidates)-1 && r.config.Unleash.ChannelMigrationDelay > 0 {
+		if admitted < maxCandidates && r.config.Unleash.ChannelMigrationDelay > 0 {
 			if !sleepWithContext(ctx, r.config.Unleash.ChannelMigrationDelay) {
 				return
 			}

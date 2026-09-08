@@ -82,6 +82,9 @@ func TestChannelReconcilerAdmitsOnlyManagedValidIntentWithinCanaryCap(t *testing
 		repo.AddInstance(name, "", "stable-v6", true)
 		repo.SetReadyOnChannel(name, "stable-v7", "unleash/unleash-server:7.6.5")
 	}
+	repo.mu.Lock()
+	repo.instances["alpha"].IsReady = false
+	repo.mu.Unlock()
 
 	repo.mu.Lock()
 	delete(repo.crds["invalid"].Annotations, kubernetes.AnnotationDesiredState)
@@ -94,12 +97,12 @@ func TestChannelReconcilerAdmitsOnlyManagedValidIntentWithinCanaryCap(t *testing
 
 	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	assert.Equal(t, "stable-v7", mustInstance(t, repo, "alpha").ReleaseChannelName)
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "alpha").ReleaseChannelName)
 	assert.Equal(t, "stable-v7", mustInstance(t, repo, "bravo").ReleaseChannelName)
-	assert.Equal(t, "stable-v6", mustInstance(t, repo, "charlie").ReleaseChannelName)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "charlie").ReleaseChannelName)
 	assert.Equal(t, "stable-v6", mustInstance(t, repo, "invalid").ReleaseChannelName)
 	assert.Equal(t, "stable-v6", mustInstance(t, repo, "unmanaged").ReleaseChannelName)
-	assert.Equal(t, []string{"alpha", "bravo"}, repo.updateCalls)
+	assert.Equal(t, []string{"bravo", "charlie"}, repo.updateCalls)
 }
 
 func TestChannelReconcilerPersistsPinnedCompletedTransactionAndPreservesObjectState(t *testing.T) {

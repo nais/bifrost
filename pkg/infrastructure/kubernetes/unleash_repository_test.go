@@ -55,6 +55,31 @@ func TestBuildUnleashCRD_UsesIngressClasses(t *testing.T) {
 	assert.Equal(t, "test-instance-api.example.com", crd.Spec.ApiIngress.Host)
 }
 
+func TestIsReadyForCurrentGeneration(t *testing.T) {
+	crd := &unleashv1.Unleash{
+		ObjectMeta: metav1.ObjectMeta{Generation: 3},
+		Status: unleashv1.UnleashStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               unleashv1.UnleashStatusConditionTypeReconciled,
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: 3,
+				},
+				{
+					Type:               unleashv1.UnleashStatusConditionTypeConnected,
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: 3,
+				},
+			},
+		},
+	}
+
+	assert.True(t, isReadyForCurrentGeneration(crd))
+
+	crd.Generation = 4
+	assert.False(t, isReadyForCurrentGeneration(crd))
+}
+
 func TestReconcileIngressClasses_UpdatesStaleInstances(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()

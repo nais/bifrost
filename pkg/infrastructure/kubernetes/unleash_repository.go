@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -367,7 +368,7 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 		ResourceVersion: crd.GetResourceVersion(),
 		CreatedAt:       crd.ObjectMeta.CreationTimestamp.Time,
 		Version:         crd.Status.Version,
-		IsReady:         crd.IsReady(),
+		IsReady:         isReadyForCurrentGeneration(crd),
 		APIUrl:          fmt.Sprintf("https://%s/api/", crd.Spec.ApiIngress.Host),
 		WebUrl:          fmt.Sprintf("https://%s/", crd.Spec.WebIngress.Host),
 
@@ -396,6 +397,23 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 	instance.ChannelNameFromStatus = crd.Status.ReleaseChannelName
 
 	return instance
+}
+
+func isReadyForCurrentGeneration(crd *unleashv1.Unleash) bool {
+	if !meta.IsStatusConditionTrue(crd.Status.Conditions, unleashv1.UnleashStatusConditionTypeReconciled) ||
+		!meta.IsStatusConditionTrue(crd.Status.Conditions, unleashv1.UnleashStatusConditionTypeConnected) {
+		return false
+	}
+
+	for _, condition := range crd.Status.Conditions {
+		if (condition.Type == unleashv1.UnleashStatusConditionTypeReconciled ||
+			condition.Type == unleashv1.UnleashStatusConditionTypeConnected) &&
+			condition.ObservedGeneration != crd.Generation {
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetCRD retrieves an Unleash CRD (exported for use by application layer)
