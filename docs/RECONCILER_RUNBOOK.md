@@ -99,7 +99,8 @@ which renders the whole CRD and PUTs it) and is unaffected by every toggle in §
 | The request/response API (`POST`/`PUT`/`DELETE /v1/unleash`) | none — always registered | `pkg/server/server.go:211` → `pkg/api/http/v1/handlers/unleash.go:191` (create), `:348` (update), `:401` (delete) |
 | Ingress-class re-apply on startup | none — runs on every process start | `pkg/server/server.go:280-288` → `UnleashRepository.ReconcileIngressClasses`, `pkg/infrastructure/kubernetes/unleash_repository.go:267` |
 | Version→channel migration batch | `BIFROST_UNLEASH_MIGRATION_ENABLED` | `pkg/server/server.go:290-303` → `pkg/application/migration/reconciler.go:186` (migrate), `:240` (rollback) |
-| Channel→channel migration batch | `BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED` | `pkg/server/server.go:305-317` → `pkg/application/migration/channel_reconciler.go:198` (migrate), `:252` (rollback) |
+| Channel→channel migration admission | `BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED` | `pkg/server/server.go` → `pkg/application/migration/channel_reconciler.go:Start` |
+| Persisted channel→channel migration recovery | none: always runs while bifrost runs | `pkg/server/server.go` → `pkg/application/migration/channel_reconciler.go:Recover` |
 
 Consequences worth knowing before you need them:
 
@@ -108,10 +109,12 @@ Consequences worth knowing before you need them:
   `bifrost.nais.io/desired-state` annotation (`unleash_repository.go:829` → `managed.go:126`). This
   happens with the reconciler disabled, and has been happening since #550 shipped. Disabling the
   reconciler does not stop intent from being recorded.
-- **Both migration batches are one-shot at startup, not loops.** They list, filter and walk the
-  candidates once and return (`migration/reconciler.go:48-131`). So *restarting the pod to disable
-  the reconciler re-runs them from the top* if their own flags are on. Check those flags before you
-  restart.
+- **Version→channel migration is one-shot at startup.** Restarting the pod re-runs it from the top
+  if its flag is on. Channel→channel admission is also one-shot and gated by
+  `BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED`, but recovery of persisted channel transactions runs
+  continuously even when admission is disabled. Disabling admission does not cancel or erase a
+  persisted transaction. Terminal `manual-recovery-required` transactions never resume automatically;
+  inspect the transaction annotation and use the database recovery plan before changing the CR.
 - **The ingress-class re-apply is unconditional and fleet-wide.** It patches every `Unleash` CR in
   the namespace whose web/api ingress class differs from the configured one — including CRs bifrost
   does not manage, since it does not filter on the managed-by label

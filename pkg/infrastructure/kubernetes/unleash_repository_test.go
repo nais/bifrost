@@ -55,6 +55,31 @@ func TestBuildUnleashCRD_UsesIngressClasses(t *testing.T) {
 	assert.Equal(t, "test-instance-api.example.com", crd.Spec.ApiIngress.Host)
 }
 
+func TestIsReadyForCurrentGeneration(t *testing.T) {
+	crd := &unleashv1.Unleash{
+		ObjectMeta: metav1.ObjectMeta{Generation: 3},
+		Status: unleashv1.UnleashStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               unleashv1.UnleashStatusConditionTypeReconciled,
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: 3,
+				},
+				{
+					Type:               unleashv1.UnleashStatusConditionTypeConnected,
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: 3,
+				},
+			},
+		},
+	}
+
+	assert.True(t, isReadyForCurrentGeneration(crd))
+
+	crd.Generation = 4
+	assert.False(t, isReadyForCurrentGeneration(crd))
+}
+
 func TestReconcileIngressClasses_UpdatesStaleInstances(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()
@@ -299,6 +324,9 @@ func TestUpdate_PreservesForeignMetadata(t *testing.T) {
 			Annotations: map[string]string{"unleasherator.nais.io/federation-replay": "2026-08-18T09:00:00Z"},
 		},
 		Spec: unleashv1.UnleashSpec{CustomImage: "quay.io/unleash/unleash-server:5.1.2"},
+		Status: unleashv1.UnleashStatus{
+			Version: "5.1.2",
+		},
 	}
 
 	client := fake.NewClientBuilder().
@@ -326,8 +354,65 @@ func TestUpdate_PreservesForeignMetadata(t *testing.T) {
 	assert.Equal(t, "approved", after.Labels["unleasherator.nais.io/federation-smoke-test"],
 		"a foreign label marks state bifrost does not own and must not clear")
 	assert.Equal(t, "2026-08-18T09:00:00Z", after.Annotations["unleasherator.nais.io/federation-replay"])
+	assert.Equal(t, "5.1.2", after.Status.Version, "a spec update must not clear observed status")
 
 	// Bifrost's own two keys are still bifrost's to write.
 	assert.Equal(t, ManagedByBifrost, after.Labels[LabelManagedBy])
 	assert.NotEmpty(t, after.Annotations[AnnotationDesiredState])
+}
+
+func TestPatchAnnotationsUsesOptimisticLockAndChangesOnlyAnnotations(t *testing.T) {
+	ctx := context.Background()
+	scheme := repoTestScheme(t)
+	live := &unleashv1.Unleash{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-a",
+			Namespace:  "unleash-ns",
+			Finalizers: []string{"unleash.nais.io/finalizer"},
+			Labels:     map[string]string{"foreign": "keep"},
+			Annotations: map[string]string{
+				"foreign": "keep",
+			},
+		},
+		Spec: unleashv1.UnleashSpec{
+			ReleaseChannel: unleashv1.UnleashReleaseChannelConfig{Name: "stable-v6"},
+		},
+		Status: unleashv1.UnleashStatus{Version: "6.4.0"},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(live).Build()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	repo := NewUnleashRepository(client, repoTestConfig(), logger).(*UnleashRepository)
+
+	read, err := repo.GetCRD(ctx, "team-a")
+	require.NoError(t, err)
+	value := `{"schemaVersion":1,"phase":"prepared"}`
+	require.NoError(t, repo.PatchAnnotations(ctx, read, map[string]*string{
+		AnnotationChannelMigration: &value,
+	}))
+
+	after := &unleashv1.Unleash{}
+	require.NoError(t, client.Get(ctx, ctrl.ObjectKey{Name: "team-a", Namespace: "unleash-ns"}, after))
+	assert.Equal(t, "stable-v6", after.Spec.ReleaseChannel.Name)
+	assert.Equal(t, "6.4.0", after.Status.Version)
+	assert.Equal(t, []string{"unleash.nais.io/finalizer"}, after.Finalizers)
+	assert.Equal(t, "keep", after.Labels["foreign"])
+	assert.Equal(t, "keep", after.Annotations["foreign"])
+	assert.Equal(t, value, after.Annotations[AnnotationChannelMigration])
+
+	concurrent := after.DeepCopy()
+	concurrent.Annotations["another-writer"] = "won"
+	require.NoError(t, client.Update(ctx, concurrent))
+
+	replacement := "replacement"
+	err = repo.PatchAnnotations(ctx, after, map[string]*string{
+		AnnotationChannelMigration: &replacement,
+	})
+	require.Error(t, err)
+	assert.True(t, apierrors.IsConflict(err))
+
+	final := &unleashv1.Unleash{}
+	require.NoError(t, client.Get(ctx, ctrl.ObjectKey{Name: "team-a", Namespace: "unleash-ns"}, final))
+	assert.Equal(t, value, final.Annotations[AnnotationChannelMigration])
+	assert.Equal(t, "won", final.Annotations["another-writer"])
 }

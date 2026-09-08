@@ -2,18 +2,38 @@ package migration
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
+	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-// ChannelReconciler handles migration of Unleash instances between release channels
+type annotationPatcher interface {
+	PatchAnnotations(ctx context.Context, crd *unleashv1.Unleash, changes map[string]*string) error
+}
+
+type transactionState struct {
+	crd         *unleashv1.Unleash
+	transaction *channelMigrationTransaction
+	intent      *unleash.Config
+	intentHash  string
+}
+
+type channelCandidate struct {
+	sourceChannel string
+	name          string
+	targetChannel string
+}
+
+// ChannelReconciler handles migration of Unleash instances between release channels.
 type ChannelReconciler struct {
 	unleashRepo        unleash.Repository
 	releaseChannelRepo releasechannel.Repository
@@ -21,8 +41,8 @@ type ChannelReconciler struct {
 	logger             *logrus.Logger
 
 	pollInterval time.Duration
-	state        sync.Map
-	pending      *pendingQueue
+	retryDelay   time.Duration
+	now          func() time.Time
 }
 
 func NewChannelReconciler(
@@ -37,229 +57,777 @@ func NewChannelReconciler(
 		config:             cfg,
 		logger:             logger,
 		pollInterval:       defaultPollInterval,
-		pending:            newPendingQueue(),
+		retryDelay:         defaultTransactionRetryDelay,
+		now:                time.Now,
 	}
 }
 
+// Recover continuously resumes persisted transactions without admitting new
+// candidates. It retries transient Kubernetes failures with bounded backoff.
+func (r *ChannelReconciler) Recover(ctx context.Context) {
+	delay := r.pollInterval
+	maxDelay := time.Minute
+
+	for ctx.Err() == nil {
+		if err := r.recoverTransactions(ctx); err != nil {
+			r.logger.WithError(err).Error("Failed to list instances for channel migration recovery")
+			delay = min(delay*2, maxDelay)
+		} else {
+			delay = r.pollInterval
+		}
+		if !sleepWithContext(ctx, delay) {
+			return
+		}
+	}
+}
+
+// Start recovers every persisted transaction before admitting a bounded number
+// of new migrations. Recovery runs even when new admission is disabled.
 func (r *ChannelReconciler) Start(ctx context.Context) {
-	if !r.config.Unleash.ChannelMigrationEnabled {
-		r.logger.Debug("Channel migration reconciler called but not enabled, skipping")
+	crds, err := r.unleashRepo.ListCRDs(ctx, false)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to list instances for channel migration recovery")
+		return
+	}
+	sort.Slice(crds, func(i, j int) bool { return crds[i].Name < crds[j].Name })
+
+	withTransaction := r.recoverTransactionsFromCRDs(ctx, crds)
+	if ctx.Err() != nil {
 		return
 	}
 
-	r.logger.Info("Starting channel-to-channel migration reconciler")
+	if !r.config.Unleash.ChannelMigrationEnabled {
+		r.logger.Debug("Channel migration admission disabled; persisted transaction recovery completed")
+		return
+	}
 
 	channelMap, err := r.config.Unleash.ParseChannelMigrationMap()
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to parse channel migration map")
 		return
 	}
-
 	if len(channelMap) == 0 {
 		r.logger.Error("Channel migration enabled but no channel map configured (BIFROST_UNLEASH_CHANNEL_MIGRATION_MAP)")
 		return
 	}
+	if r.config.Unleash.ChannelMigrationMaxCandidates <= 0 {
+		r.logger.Info("Channel migration admission capped at zero; no new transactions admitted")
+		return
+	}
+	if err := r.validateChannelMap(ctx, channelMap); err != nil {
+		r.logger.WithError(err).Error("Channel migration map validation failed")
+		return
+	}
 
-	for source, target := range channelMap {
-		if _, err := r.releaseChannelRepo.Get(ctx, source); err != nil {
-			r.logger.WithError(err).Errorf("Channel migration source channel %q not found", source)
+	candidates := r.newCandidates(crds, withTransaction, channelMap)
+	maxCandidates := r.config.Unleash.ChannelMigrationMaxCandidates
+	admitted := 0
+	for _, candidate := range candidates {
+		if ctx.Err() != nil {
 			return
 		}
-		targetCh, err := r.releaseChannelRepo.Get(ctx, target)
+		if admitted >= maxCandidates {
+			recordChannelMigrationEvent(channelEventCanaryLimited)
+			return
+		}
+
+		instance, err := r.unleashRepo.Get(ctx, candidate.name)
 		if err != nil {
-			r.logger.WithError(err).Errorf("Channel migration target channel %q not found", target)
-			return
+			r.logger.WithError(err).WithField("instance", candidate.name).
+				Warn("Could not verify channel migration candidate health")
+			continue
 		}
-		r.logger.WithFields(logrus.Fields{
-			"sourceChannel": source,
-			"targetChannel": target,
-			"targetImage":   targetCh.Image,
-		}).Info("Validated channel migration mapping")
-	}
-
-	instances, err := r.unleashRepo.List(ctx, false)
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to list instances for channel migration")
-		return
-	}
-
-	type candidate struct {
-		instance      *unleash.Instance
-		targetChannel string
-	}
-
-	var candidates []candidate
-	for _, inst := range instances {
-		if target, ok := channelMap[inst.ReleaseChannelName]; ok {
-			candidates = append(candidates, candidate{instance: inst, targetChannel: target})
+		if !instance.IsReady {
+			recordChannelMigrationEvent(channelEventSkippedUnhealthy)
+			r.logger.WithField("instance", candidate.name).
+				Warn("Skipping channel migration candidate because it is not healthy")
+			continue
 		}
-	}
 
-	if len(candidates) == 0 {
-		r.logger.Info("No instances found on source channels to migrate")
-		return
-	}
+		if err := r.admitTransaction(ctx, candidate.name, candidate.sourceChannel, candidate.targetChannel); err != nil {
+			r.logTransactionError(candidate.name, "Failed to admit channel migration transaction", err)
+			continue
+		}
+		admitted++
+		r.resumeTransaction(ctx, candidate.name)
 
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].instance.Name < candidates[j].instance.Name
-	})
-
-	for _, c := range candidates {
-		r.state.Store(c.instance.Name, &instanceState{
-			originalValue: c.instance.ReleaseChannelName,
-			status:        statusPending,
-		})
-		r.pending.add(c.instance.Name)
-	}
-
-	r.logger.WithFields(logrus.Fields{
-		"candidateCount": len(candidates),
-		"channelMap":     channelMap,
-	}).Info("Found instances to migrate between channels")
-
-	migrationDelay := r.config.Unleash.ChannelMigrationDelay
-	for i, c := range candidates {
-		select {
-		case <-ctx.Done():
-			logCurrentState(r.logger, &r.state, r.pending, "Channel migration interrupted by shutdown")
-			return
-		default:
-			r.migrateInstance(ctx, c.instance.Name, c.targetChannel)
-
-			if i < len(candidates)-1 && migrationDelay > 0 {
-				r.logger.WithField("delay", migrationDelay).Debug("Waiting before next channel migration")
-				select {
-				case <-ctx.Done():
-					logCurrentState(r.logger, &r.state, r.pending, "Channel migration interrupted during delay")
-					return
-				case <-time.After(migrationDelay):
-				}
+		if admitted < maxCandidates && r.config.Unleash.ChannelMigrationDelay > 0 {
+			if !sleepWithContext(ctx, r.config.Unleash.ChannelMigrationDelay) {
+				return
 			}
 		}
 	}
-
-	summary := computeSummary(&r.state)
-	logSummary(r.logger, summary, "Channel migration reconciler")
 }
 
-func (r *ChannelReconciler) migrateInstance(ctx context.Context, name, targetChannel string) {
-	log := r.logger.WithFields(logrus.Fields{
-		"instance":      name,
-		"targetChannel": targetChannel,
-	})
-
-	stateVal, ok := r.state.Load(name)
-	if !ok {
-		log.Error("Instance not found in channel migration state")
-		return
-	}
-	state := stateVal.(*instanceState)
-
-	log.WithField("originalChannel", state.originalValue).Info("Starting channel migration")
-
-	inst, err := r.unleashRepo.Get(ctx, name)
+func (r *ChannelReconciler) recoverTransactions(ctx context.Context) error {
+	crds, err := r.unleashRepo.ListCRDs(ctx, false)
 	if err != nil {
-		log.WithError(err).Error("Failed to get instance before channel migration")
-		state.status = statusFailed
-		r.pending.remove(name)
-		return
+		return err
 	}
-	if !inst.IsReady {
-		log.Warn("Skipping channel migration: instance is not healthy")
-		state.status = statusSkippedUnhealthy
-		r.pending.remove(name)
-		return
-	}
+	sort.Slice(crds, func(i, j int) bool { return crds[i].Name < crds[j].Name })
+	r.recoverTransactionsFromCRDs(ctx, crds)
+	return ctx.Err()
+}
 
-	state.status = statusInProgress
-
-	crd, err := r.unleashRepo.GetCRD(ctx, name)
-	if err != nil {
-		log.WithError(err).Error("Failed to get instance CRD for channel migration")
-		state.status = statusFailed
-		r.pending.remove(name)
-		return
-	}
-
-	builder := kubernetes.LoadConfigFromCRD(crd)
-	builder.WithReleaseChannel(targetChannel)
-	cfg, err := builder.Build()
-	if err != nil {
-		log.WithError(err).Error("Failed to build channel migration config")
-		state.status = statusFailed
-		r.pending.remove(name)
-		return
-	}
-
-	// No resourceVersion precondition: cfg is rebuilt from the CRD read a few
-	// lines above, so the window is one call wide, and a conflict would fail a
-	// one-shot batch that never retries. The API update path, which merges a
-	// request body onto a much older read, does pass one.
-	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
-		log.WithError(err).Error("Failed to update instance to target channel")
-		state.status = statusFailed
-		r.pending.remove(name)
-		return
-	}
-
-	log.Info("Updated instance to target channel, waiting for health check")
-
-	if err := waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.ChannelMigrationHealthTimeout, r.pollInterval); err != nil {
-		log.WithError(err).Warn("Instance failed health check after channel migration, rolling back")
-		if rbErr := r.rollback(ctx, name, state.originalValue); rbErr != nil {
-			state.status = statusRollbackFailed
-		} else {
-			state.status = statusRolledBack
+func (r *ChannelReconciler) recoverTransactionsFromCRDs(ctx context.Context, crds []unleashv1.Unleash) map[string]bool {
+	withTransaction := make(map[string]bool)
+	for i := range crds {
+		raw := crds[i].GetAnnotations()[channelMigrationAnnotation]
+		if raw == "" {
+			continue
 		}
-		return
+		withTransaction[crds[i].Name] = true
+		if _, err := unmarshalChannelMigrationTransaction(raw); err != nil {
+			recordChannelMigrationEvent(channelEventInvalidTransaction)
+			r.logger.WithError(err).WithField("instance", crds[i].Name).
+				Error("Invalid persisted channel migration transaction; manual intervention required")
+			continue
+		}
+
+		recordChannelMigrationEvent(channelEventResumed)
+		r.resumeTransaction(ctx, crds[i].Name)
+		if ctx.Err() != nil {
+			return withTransaction
+		}
 	}
-
-	state.status = statusCompleted
-	r.pending.remove(name)
-
-	log.Info("Successfully migrated instance to target channel")
+	return withTransaction
 }
 
-func (r *ChannelReconciler) rollback(ctx context.Context, name, originalChannel string) error {
-	log := r.logger.WithFields(logrus.Fields{
-		"instance":        name,
-		"originalChannel": originalChannel,
-	})
+func (r *ChannelReconciler) validateChannelMap(ctx context.Context, channelMap map[string]string) error {
+	for source, target := range channelMap {
+		sourceChannel, err := r.releaseChannelRepo.Get(ctx, source)
+		if err != nil {
+			return fmt.Errorf("source channel %q: %w", source, err)
+		}
+		if sourceChannel.UID == "" || sourceChannel.Image == "" {
+			return fmt.Errorf("source channel %q has no UID or image to pin", source)
+		}
+		targetChannel, err := r.releaseChannelRepo.Get(ctx, target)
+		if err != nil {
+			return fmt.Errorf("target channel %q: %w", target, err)
+		}
+		if targetChannel.UID == "" || targetChannel.Image == "" {
+			return fmt.Errorf("target channel %q has no UID or image to pin", target)
+		}
+	}
+	return nil
+}
 
-	log.Info("Rolling back instance to original channel")
+func (r *ChannelReconciler) newCandidates(
+	crds []unleashv1.Unleash,
+	withTransaction map[string]bool,
+	channelMap map[string]string,
+) []channelCandidate {
+	candidates := make([]channelCandidate, 0)
+	for i := range crds {
+		crd := &crds[i]
+		if withTransaction[crd.Name] {
+			continue
+		}
+		if !kubernetes.IsManagedByBifrost(crd) {
+			recordChannelMigrationEvent(channelEventSkippedUnmanaged)
+			continue
+		}
+		cfg, _, err := loadDesiredStateIntent(crd)
+		if err != nil {
+			recordChannelMigrationEvent(channelEventSkippedNoIntent)
+			r.logger.WithError(err).WithField("instance", crd.Name).
+				Warn("Skipping channel migration candidate with invalid desired-state intent")
+			continue
+		}
+		target, ok := channelMap[cfg.ReleaseChannelName]
+		if !ok || cfg.CustomVersion != "" {
+			continue
+		}
+		candidates = append(candidates, channelCandidate{
+			name:          crd.Name,
+			sourceChannel: cfg.ReleaseChannelName,
+			targetChannel: target,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].name < candidates[j].name })
+	return candidates
+}
 
+func (r *ChannelReconciler) admitTransaction(ctx context.Context, name, sourceChannelName, targetChannelName string) error {
+	patcher, ok := r.unleashRepo.(annotationPatcher)
+	if !ok {
+		return errors.New("unleash repository does not support annotation CAS")
+	}
+
+	for attempt := 0; attempt < transactionAnnotationRetries; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		crd, err := r.unleashRepo.GetCRD(ctx, name)
+		if err != nil {
+			return err
+		}
+		if crd.GetAnnotations()[channelMigrationAnnotation] != "" {
+			return nil
+		}
+		if !kubernetes.IsManagedByBifrost(crd) {
+			return ownershipError("instance is no longer managed by Bifrost")
+		}
+		if crd.UID == "" {
+			return ownershipError("instance has no Kubernetes UID")
+		}
+
+		sourceIntent, sourceHash, err := loadDesiredStateIntent(crd)
+		if err != nil {
+			return ownershipError(err.Error())
+		}
+		if sourceIntent.ReleaseChannelName != sourceChannelName || sourceIntent.CustomVersion != "" {
+			return ownershipError("current desired-state intent is no longer on the configured source channel")
+		}
+
+		sourceChannel, err := r.releaseChannelRepo.Get(ctx, sourceChannelName)
+		if err != nil {
+			return err
+		}
+		if sourceChannel.UID == "" || sourceChannel.Image == "" {
+			return fmt.Errorf("source channel %q has no UID or image to pin", sourceChannelName)
+		}
+		targetChannel, err := r.releaseChannelRepo.Get(ctx, targetChannelName)
+		if err != nil {
+			return err
+		}
+		if targetChannel.UID == "" || targetChannel.Image == "" {
+			return fmt.Errorf("target channel %q has no UID or image to pin", targetChannelName)
+		}
+		_, targetHash, err := targetIntent(sourceIntent, targetChannelName)
+		if err != nil {
+			return err
+		}
+
+		transaction := &channelMigrationTransaction{
+			SchemaVersion:                channelTransactionSchema,
+			ResourceUID:                  crd.UID,
+			Phase:                        phasePrepared,
+			Deadline:                     r.now().UTC().Add(r.config.Unleash.ChannelMigrationHealthTimeout),
+			SourceChannel:                sourceIntent.ReleaseChannelName,
+			SourceChannelUID:             sourceChannel.UID,
+			SourceImage:                  sourceChannel.Image,
+			TargetChannel:                targetChannelName,
+			TargetChannelUID:             targetChannel.UID,
+			TargetImage:                  targetChannel.Image,
+			DesiredStateIntentHash:       sourceHash,
+			TargetDesiredStateIntentHash: targetHash,
+		}
+		raw, err := marshalChannelMigrationTransaction(transaction)
+		if err != nil {
+			return err
+		}
+		if err := patcher.PatchAnnotations(ctx, crd, map[string]*string{channelMigrationAnnotation: &raw}); err != nil {
+			if apierrors.IsConflict(err) {
+				recordChannelMigrationEvent(channelEventConflictRetry)
+				if sleepWithContext(ctx, r.retryDelay) {
+					continue
+				}
+				return ctx.Err()
+			}
+			return err
+		}
+
+		recordChannelMigrationEvent(channelEventAdmitted)
+		return nil
+	}
+	return errors.New("channel migration admission conflicts exhausted")
+}
+
+func (r *ChannelReconciler) resumeTransaction(ctx context.Context, name string) {
+	for step := 0; step < 8 && ctx.Err() == nil; step++ {
+		state, err := r.readTransaction(ctx, name)
+		if err != nil {
+			r.logTransactionError(name, "Cannot resume channel migration transaction", err)
+			return
+		}
+
+		switch state.transaction.Phase {
+		case phasePrepared:
+			err = r.ensureTargetWritten(ctx, name)
+		case phaseTargetWritten:
+			err = r.ensureTargetHealthy(ctx, name)
+		case phaseRollbackPending:
+			err = r.ensureRollbackWritten(ctx, name)
+		case phaseRollbackWritten:
+			err = r.ensureRollbackHealthy(ctx, name)
+		case phaseCompleted, phaseRolledBack, phaseManualRecovery:
+			return
+		default:
+			err = ownershipError("transaction phase is not supported")
+		}
+		if err != nil {
+			r.logTransactionError(name, "Channel migration transaction stopped", err)
+			return
+		}
+	}
+}
+
+func (r *ChannelReconciler) ensureTargetWritten(ctx context.Context, name string) error {
+	for attempt := 0; attempt < targetWriteRetries; attempt++ {
+		state, err := r.readTransaction(ctx, name)
+		if err != nil {
+			return err
+		}
+		transaction := state.transaction
+		if transaction.Phase != phasePrepared {
+			return nil
+		}
+		if !r.now().Before(transaction.Deadline) {
+			return r.handleTargetFailure(ctx, name, failureTransactionDeadline)
+		}
+		if err := r.checkPinnedTarget(ctx, transaction); err != nil {
+			if errors.Is(err, errTargetChannelChanged) {
+				return r.handleTargetFailure(ctx, name, failureTargetChannelChanged)
+			}
+			return err
+		}
+
+		switch {
+		case state.intentHash == transaction.TargetDesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == transaction.TargetChannel:
+			return r.transition(ctx, name, []channelMigrationPhase{phasePrepared}, phaseTargetWritten,
+				[]string{transaction.TargetDesiredStateIntentHash}, time.Time{}, "")
+		case state.intentHash != transaction.DesiredStateIntentHash ||
+			state.intent.ReleaseChannelName != transaction.SourceChannel:
+			recordChannelMigrationEvent(channelEventOwnershipChanged)
+			return ownershipError(failureIntentOwnershipChanged)
+		}
+
+		instance, err := r.unleashRepo.Get(ctx, name)
+		if err != nil {
+			return err
+		}
+		if !instance.IsReady {
+			return r.markManualRecovery(ctx, name, failureSourceUnhealthy)
+		}
+
+		targetConfig, targetHash, err := targetIntent(state.intent, transaction.TargetChannel)
+		if err != nil {
+			return err
+		}
+		if targetHash != transaction.TargetDesiredStateIntentHash {
+			return ownershipError("target desired-state intent no longer matches the transaction")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err = r.unleashRepo.Update(ctx, targetConfig, unleash.UpdateOptions{
+			ExpectedResourceVersion: state.crd.ResourceVersion,
+		})
+		if err == nil {
+			return r.transition(ctx, name, []channelMigrationPhase{phasePrepared}, phaseTargetWritten,
+				[]string{transaction.TargetDesiredStateIntentHash}, time.Time{}, "")
+		}
+		if apierrors.IsConflict(err) {
+			recordChannelMigrationEvent(channelEventConflictRetry)
+			if sleepWithContext(ctx, r.retryDelay) {
+				continue
+			}
+			return ctx.Err()
+		}
+		return r.handleTargetFailure(ctx, name, failureTargetWrite)
+	}
+	return r.handleTargetFailure(ctx, name, failureTargetWrite)
+}
+
+func (r *ChannelReconciler) ensureTargetHealthy(ctx context.Context, name string) error {
+	state, err := r.readTransaction(ctx, name)
+	if err != nil {
+		return err
+	}
+	err = r.waitForTransactionHealthy(
+		ctx,
+		name,
+		phaseTargetWritten,
+		state.transaction.TargetDesiredStateIntentHash,
+		state.transaction.Deadline,
+		true,
+	)
+	switch {
+	case err == nil:
+		if err := r.checkPinnedTarget(ctx, state.transaction); err != nil {
+			if errors.Is(err, errTargetChannelChanged) {
+				return r.handleTargetFailure(ctx, name, failureTargetChannelChanged)
+			}
+			return err
+		}
+		if err := r.transition(ctx, name, []channelMigrationPhase{phaseTargetWritten}, phaseCompleted,
+			[]string{state.transaction.TargetDesiredStateIntentHash}, time.Time{}, ""); err != nil {
+			return err
+		}
+		recordChannelMigrationEvent(channelEventCompleted)
+		return nil
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, errTargetChannelChanged):
+		return r.handleTargetFailure(ctx, name, failureTargetChannelChanged)
+	case errors.Is(err, errTransactionTimeout):
+		return r.handleTargetFailure(ctx, name, failureTargetTimeout)
+	default:
+		return err
+	}
+}
+
+func (r *ChannelReconciler) handleTargetFailure(ctx context.Context, name, reason string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !r.config.Unleash.ChannelMigrationRollbackSafe {
+		return r.markManualRecovery(ctx, name, reason)
+	}
+	return r.transition(ctx, name, []channelMigrationPhase{phasePrepared, phaseTargetWritten}, phaseRollbackPending,
+		nil, r.now().UTC().Add(r.config.Unleash.ChannelMigrationHealthTimeout), reason)
+}
+
+func (r *ChannelReconciler) ensureRollbackWritten(ctx context.Context, name string) error {
+	for attempt := 0; attempt < targetWriteRetries; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		state, err := r.readTransaction(ctx, name)
+		if err != nil {
+			return err
+		}
+		transaction := state.transaction
+		if transaction.Phase != phaseRollbackPending {
+			return nil
+		}
+		if !r.now().Before(transaction.Deadline) {
+			return r.markManualRecovery(ctx, name, failureRollbackTimeout)
+		}
+		if err := r.checkPinnedSource(ctx, transaction); err != nil {
+			if errors.Is(err, errSourceChannelChanged) || apierrors.IsNotFound(err) {
+				return r.markManualRecovery(ctx, name, failureSourceChannelChanged)
+			}
+			return err
+		}
+
+		switch {
+		case state.intentHash == transaction.DesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == transaction.SourceChannel:
+			return r.transition(ctx, name, []channelMigrationPhase{phaseRollbackPending}, phaseRollbackWritten,
+				[]string{transaction.DesiredStateIntentHash}, time.Time{}, "")
+		case state.intentHash != transaction.TargetDesiredStateIntentHash ||
+			state.intent.ReleaseChannelName != transaction.TargetChannel:
+			recordChannelMigrationEvent(channelEventOwnershipChanged)
+			return ownershipError(failureIntentOwnershipChanged)
+		}
+
+		sourceConfig := *state.intent
+		sourceConfig.ReleaseChannelName = transaction.SourceChannel
+		sourceHash, err := desiredStateIntentHash(&sourceConfig)
+		if err != nil {
+			return err
+		}
+		if sourceHash != transaction.DesiredStateIntentHash {
+			return ownershipError("source desired-state intent no longer matches the transaction")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err = r.unleashRepo.Update(ctx, &sourceConfig, unleash.UpdateOptions{
+			ExpectedResourceVersion: state.crd.ResourceVersion,
+		})
+		if err == nil {
+			return r.transition(ctx, name, []channelMigrationPhase{phaseRollbackPending}, phaseRollbackWritten,
+				[]string{transaction.DesiredStateIntentHash}, time.Time{}, "")
+		}
+		if apierrors.IsConflict(err) {
+			recordChannelMigrationEvent(channelEventConflictRetry)
+			if sleepWithContext(ctx, r.retryDelay) {
+				continue
+			}
+			return ctx.Err()
+		}
+		return r.markManualRecovery(ctx, name, failureRollbackWrite)
+	}
+	return r.markManualRecovery(ctx, name, failureRollbackWrite)
+}
+
+func (r *ChannelReconciler) ensureRollbackHealthy(ctx context.Context, name string) error {
+	state, err := r.readTransaction(ctx, name)
+	if err != nil {
+		return err
+	}
+	err = r.waitForTransactionHealthy(
+		ctx,
+		name,
+		phaseRollbackWritten,
+		state.transaction.DesiredStateIntentHash,
+		state.transaction.Deadline,
+		false,
+	)
+	switch {
+	case err == nil:
+		if err := r.checkPinnedSource(ctx, state.transaction); err != nil {
+			if errors.Is(err, errSourceChannelChanged) || apierrors.IsNotFound(err) {
+				return r.markManualRecovery(ctx, name, failureSourceChannelChanged)
+			}
+			return err
+		}
+		if err := r.transition(ctx, name, []channelMigrationPhase{phaseRollbackWritten}, phaseRolledBack,
+			[]string{state.transaction.DesiredStateIntentHash}, time.Time{}, ""); err != nil {
+			return err
+		}
+		recordChannelMigrationEvent(channelEventRolledBack)
+		return nil
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, errTransactionTimeout):
+		return r.markManualRecovery(ctx, name, failureRollbackTimeout)
+	default:
+		return err
+	}
+}
+
+func (r *ChannelReconciler) waitForTransactionHealthy(
+	ctx context.Context,
+	name string,
+	expectedPhase channelMigrationPhase,
+	expectedHash string,
+	deadline time.Time,
+	validateTarget bool,
+) error {
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		state, err := r.readTransaction(ctx, name)
+		if err == nil {
+			if state.transaction.Phase != expectedPhase ||
+				state.intentHash != expectedHash ||
+				!intentMatchesPhase(state) {
+				recordChannelMigrationEvent(channelEventOwnershipChanged)
+				return ownershipError(failureIntentOwnershipChanged)
+			}
+			if validateTarget {
+				if err := r.checkPinnedTarget(ctx, state.transaction); err != nil {
+					if errors.Is(err, errTargetChannelChanged) {
+						return err
+					}
+				} else if instance, getErr := r.unleashRepo.Get(ctx, name); getErr == nil &&
+					instance.IsReady &&
+					instance.ChannelNameFromStatus == state.transaction.TargetChannel &&
+					instance.ResolvedImage == state.transaction.TargetImage {
+					return nil
+				}
+			} else if instance, getErr := r.unleashRepo.Get(ctx, name); getErr == nil &&
+				instance.IsReady &&
+				instance.ChannelNameFromStatus == state.transaction.SourceChannel &&
+				instance.ResolvedImage == state.transaction.SourceImage {
+				return nil
+			}
+		} else if isOwnershipError(err) {
+			recordChannelMigrationEvent(channelEventOwnershipChanged)
+			return err
+		}
+
+		if !r.now().Before(deadline) {
+			return errTransactionTimeout
+		}
+
+		wait := r.pollInterval
+		if remaining := deadline.Sub(r.now()); remaining < wait {
+			wait = remaining
+		}
+		if !sleepWithContext(ctx, wait) {
+			return ctx.Err()
+		}
+	}
+}
+
+func intentMatchesPhase(state *transactionState) bool {
+	switch state.transaction.Phase {
+	case phasePrepared:
+		return (state.intentHash == state.transaction.DesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == state.transaction.SourceChannel) ||
+			(state.intentHash == state.transaction.TargetDesiredStateIntentHash &&
+				state.intent.ReleaseChannelName == state.transaction.TargetChannel)
+	case phaseTargetWritten:
+		return state.intentHash == state.transaction.TargetDesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == state.transaction.TargetChannel
+	case phaseRollbackPending:
+		return (state.intentHash == state.transaction.DesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == state.transaction.SourceChannel) ||
+			(state.intentHash == state.transaction.TargetDesiredStateIntentHash &&
+				state.intent.ReleaseChannelName == state.transaction.TargetChannel)
+	case phaseRollbackWritten, phaseRolledBack:
+		return state.intentHash == state.transaction.DesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == state.transaction.SourceChannel
+	case phaseCompleted:
+		return state.intentHash == state.transaction.TargetDesiredStateIntentHash &&
+			state.intent.ReleaseChannelName == state.transaction.TargetChannel
+	case phaseManualRecovery:
+		return state.intentHash == state.transaction.DesiredStateIntentHash ||
+			state.intentHash == state.transaction.TargetDesiredStateIntentHash
+	default:
+		return false
+	}
+}
+
+func (r *ChannelReconciler) checkPinnedTarget(ctx context.Context, transaction *channelMigrationTransaction) error {
+	channel, err := r.releaseChannelRepo.Get(ctx, transaction.TargetChannel)
+	if err != nil {
+		return err
+	}
+	if channel.UID != transaction.TargetChannelUID || channel.Image != transaction.TargetImage {
+		return errTargetChannelChanged
+	}
+	return nil
+}
+
+func (r *ChannelReconciler) checkPinnedSource(ctx context.Context, transaction *channelMigrationTransaction) error {
+	channel, err := r.releaseChannelRepo.Get(ctx, transaction.SourceChannel)
+	if err != nil {
+		return err
+	}
+	if channel.UID != transaction.SourceChannelUID || channel.Image != transaction.SourceImage {
+		return errSourceChannelChanged
+	}
+	return nil
+}
+
+func (r *ChannelReconciler) markManualRecovery(ctx context.Context, name, reason string) error {
+	if err := r.transition(ctx, name,
+		[]channelMigrationPhase{phasePrepared, phaseTargetWritten, phaseRollbackPending, phaseRollbackWritten},
+		phaseManualRecovery, nil, time.Time{}, reason); err != nil {
+		return err
+	}
+	recordChannelMigrationEvent(channelEventManualRecovery)
+	return nil
+}
+
+func (r *ChannelReconciler) transition(
+	ctx context.Context,
+	name string,
+	from []channelMigrationPhase,
+	to channelMigrationPhase,
+	allowedHashes []string,
+	deadline time.Time,
+	failureReason string,
+) error {
+	patcher, ok := r.unleashRepo.(annotationPatcher)
+	if !ok {
+		return errors.New("unleash repository does not support annotation CAS")
+	}
+
+	for attempt := 0; attempt < transactionAnnotationRetries; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		state, err := r.readTransaction(ctx, name)
+		if err != nil {
+			return err
+		}
+		if state.transaction.Phase == to {
+			return nil
+		}
+		if !phaseAllowed(state.transaction.Phase, from) {
+			return ownershipError(fmt.Sprintf("transaction phase changed from expected state to %q", state.transaction.Phase))
+		}
+		if !hashAllowed(state.intentHash, state.transaction, allowedHashes) || !intentMatchesPhase(state) {
+			recordChannelMigrationEvent(channelEventOwnershipChanged)
+			return ownershipError(failureIntentOwnershipChanged)
+		}
+
+		updated := *state.transaction
+		updated.Phase = to
+		if !deadline.IsZero() {
+			updated.Deadline = deadline
+		}
+		updated.FailureReason = failureReason
+		raw, err := marshalChannelMigrationTransaction(&updated)
+		if err != nil {
+			return err
+		}
+		if err := patcher.PatchAnnotations(ctx, state.crd, map[string]*string{channelMigrationAnnotation: &raw}); err != nil {
+			if apierrors.IsConflict(err) {
+				recordChannelMigrationEvent(channelEventConflictRetry)
+				if sleepWithContext(ctx, r.retryDelay) {
+					continue
+				}
+				return ctx.Err()
+			}
+			return err
+		}
+		return nil
+	}
+	return errors.New("channel migration transaction annotation conflicts exhausted")
+}
+
+func hashAllowed(hash string, transaction *channelMigrationTransaction, allowed []string) bool {
+	if allowed == nil {
+		return hash == transaction.DesiredStateIntentHash || hash == transaction.TargetDesiredStateIntentHash
+	}
+	for _, allowedHash := range allowed {
+		if hash == allowedHash {
+			return true
+		}
+	}
+	return false
+}
+
+func phaseAllowed(phase channelMigrationPhase, allowed []channelMigrationPhase) bool {
+	for _, candidate := range allowed {
+		if phase == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *ChannelReconciler) readTransaction(ctx context.Context, name string) (*transactionState, error) {
 	crd, err := r.unleashRepo.GetCRD(ctx, name)
 	if err != nil {
-		log.WithError(err).Error("Failed to get instance CRD for channel rollback")
-		return err
+		return nil, err
 	}
-
-	builder := kubernetes.LoadConfigFromCRD(crd)
-	builder.WithReleaseChannel(originalChannel)
-	cfg, err := builder.Build()
+	if !kubernetes.IsManagedByBifrost(crd) {
+		return nil, ownershipError("instance is no longer managed by Bifrost")
+	}
+	raw := crd.GetAnnotations()[channelMigrationAnnotation]
+	if raw == "" {
+		return nil, ownershipError("channel migration transaction annotation is missing")
+	}
+	transaction, err := unmarshalChannelMigrationTransaction(raw)
 	if err != nil {
-		log.WithError(err).Error("Failed to build channel rollback config")
-		return err
+		return nil, ownershipError(err.Error())
 	}
-
-	// No precondition, and unlike the migrate call this window is not one call
-	// wide: originalValue was captured before waitForHealthy, which runs for up
-	// to MigrationHealthTimeout (5m by default). A user PUT landing inside that
-	// window is reverted here. A precondition would not help — it would only
-	// turn a silent revert into a failed rollback, leaving the instance on the
-	// version the migration could not make healthy. Recording it so the choice
-	// is visible rather than accidental.
-	if err := r.unleashRepo.Update(ctx, cfg, unleash.UpdateOptions{}); err != nil {
-		log.WithError(err).Error("Failed to rollback instance to original channel")
-		return err
+	if crd.UID == "" || crd.UID != transaction.ResourceUID {
+		return nil, ownershipError("channel migration transaction resource UID does not match the live instance")
 	}
-
-	if err := waitForHealthy(ctx, r.unleashRepo, r.logger, name, r.config.Unleash.ChannelMigrationHealthTimeout, r.pollInterval); err != nil {
-		log.WithError(err).Error("CRITICAL: Instance did not recover after channel rollback - manual intervention required")
-		return err
+	intent, hash, err := loadDesiredStateIntent(crd)
+	if err != nil {
+		return nil, ownershipError(err.Error())
 	}
+	return &transactionState{
+		crd:         crd,
+		transaction: transaction,
+		intent:      intent,
+		intentHash:  hash,
+	}, nil
+}
 
-	r.pending.remove(name)
-	log.Info("Successfully rolled back instance to original channel")
-	return nil
+func (r *ChannelReconciler) logTransactionError(name, message string, err error) {
+	entry := r.logger.WithError(err).WithField("instance", name)
+	if isOwnershipError(err) {
+		recordChannelMigrationEvent(channelEventOwnershipChanged)
+		entry.Error(message + "; ownership changed or persisted state is invalid")
+		return
+	}
+	entry.Error(message)
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -223,6 +224,7 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	// someone other than bifrost.
 	rendered := unleashNew.DeepCopy()
 	unleashNew.ObjectMeta = *unleashOld.ObjectMeta.DeepCopy()
+	unleashNew.Status = unleashOld.Status
 	ApplyManagedMetadata(&unleashNew, rendered)
 
 	if opts.ExpectedResourceVersion != "" {
@@ -253,6 +255,33 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 		r.logger.WithContext(ctx).WithFields(logFields).Info("Updated Unleash instance")
 	}
 
+	return nil
+}
+
+// PatchAnnotations applies annotation-only changes with an optimistic lock
+// against the exact object the caller validated.
+func (r *UnleashRepository) PatchAnnotations(ctx context.Context, crd *unleashv1.Unleash, changes map[string]*string) error {
+	if crd.GetResourceVersion() == "" {
+		return fmt.Errorf("cannot patch annotations for %s without resourceVersion", crd.GetName())
+	}
+
+	base := crd.DeepCopy()
+	updated := crd.DeepCopy()
+	if updated.Annotations == nil {
+		updated.Annotations = map[string]string{}
+	}
+	for key, value := range changes {
+		if value == nil {
+			delete(updated.Annotations, key)
+			continue
+		}
+		updated.Annotations[key] = *value
+	}
+
+	patch := ctrl.MergeFromWithOptions(base, ctrl.MergeFromWithOptimisticLock{})
+	if err := r.kubeClient.Patch(ctx, updated, patch); err != nil {
+		return fmt.Errorf("failed to patch unleash annotations: %w", err)
+	}
 	return nil
 }
 
@@ -339,7 +368,7 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 		ResourceVersion: crd.GetResourceVersion(),
 		CreatedAt:       crd.ObjectMeta.CreationTimestamp.Time,
 		Version:         crd.Status.Version,
-		IsReady:         crd.IsReady(),
+		IsReady:         isReadyForCurrentGeneration(crd),
 		APIUrl:          fmt.Sprintf("https://%s/api/", crd.Spec.ApiIngress.Host),
 		WebUrl:          fmt.Sprintf("https://%s/", crd.Spec.WebIngress.Host),
 
@@ -368,6 +397,23 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 	instance.ChannelNameFromStatus = crd.Status.ReleaseChannelName
 
 	return instance
+}
+
+func isReadyForCurrentGeneration(crd *unleashv1.Unleash) bool {
+	if !meta.IsStatusConditionTrue(crd.Status.Conditions, unleashv1.UnleashStatusConditionTypeReconciled) ||
+		!meta.IsStatusConditionTrue(crd.Status.Conditions, unleashv1.UnleashStatusConditionTypeConnected) {
+		return false
+	}
+
+	for _, condition := range crd.Status.Conditions {
+		if (condition.Type == unleashv1.UnleashStatusConditionTypeReconciled ||
+			condition.Type == unleashv1.UnleashStatusConditionTypeConnected) &&
+			condition.ObservedGeneration != crd.Generation {
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetCRD retrieves an Unleash CRD (exported for use by application layer)

@@ -74,6 +74,7 @@ func convertToChannel(crd *releasechannelv1.ReleaseChannel) *releasechannel.Chan
 
 	return &releasechannel.Channel{
 		Name:      crd.Name,
+		UID:       crd.UID,
 		Image:     string(crd.Spec.Image),
 		CreatedAt: crd.CreationTimestamp.Time,
 		Spec: releasechannel.ChannelSpec{

@@ -2,20 +2,18 @@ package migration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/unleash"
+	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
-
-var (
-	errUpdateFailed = errors.New("update failed")
-	errCRDNotFound  = errors.New("CRD not found")
-	errListFailed   = errors.New("failed to list instances")
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func newChannelTestConfig(enabled bool, channelMap string, healthTimeout time.Duration) *config.Config {
@@ -25,546 +23,434 @@ func newChannelTestConfig(enabled bool, channelMap string, healthTimeout time.Du
 			ChannelMigrationEnabled:       enabled,
 			ChannelMigrationMap:           channelMap,
 			ChannelMigrationHealthTimeout: healthTimeout,
+			ChannelMigrationMaxCandidates: 10,
+			ChannelMigrationRollbackSafe:  false,
 		},
 	}
 }
 
-func newChannelTestReconciler(repo unleash.Repository, channelRepo *MockReleaseChannelRepository, cfg *config.Config) *ChannelReconciler {
-	r := NewChannelReconciler(repo, channelRepo, cfg, newTestLogger())
-	r.pollInterval = 10 * time.Millisecond
-	return r
+func newChannelTestReconciler(
+	repo unleash.Repository,
+	channelRepo *MockReleaseChannelRepository,
+	cfg *config.Config,
+) *ChannelReconciler {
+	reconciler := NewChannelReconciler(repo, channelRepo, cfg, newTestLogger())
+	reconciler.pollInterval = 5 * time.Millisecond
+	reconciler.retryDelay = time.Millisecond
+	return reconciler
 }
 
-func TestChannelReconciler_Start_Disabled(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("test", "", "stable-v5", true)
+func TestChannelMigrationTransactionRequiresKnownVersionAndUID(t *testing.T) {
+	transaction := &channelMigrationTransaction{
+		SchemaVersion:                channelTransactionSchema,
+		ResourceUID:                  "instance-uid",
+		Phase:                        phasePrepared,
+		Deadline:                     time.Now().UTC().Add(time.Minute),
+		SourceChannel:                "stable-v6",
+		SourceChannelUID:             "source-channel-uid",
+		SourceImage:                  "unleash/unleash-server:6.4.0",
+		TargetChannel:                "stable-v7",
+		TargetChannelUID:             "channel-uid",
+		TargetImage:                  "unleash/unleash-server:7.6.5",
+		DesiredStateIntentHash:       "source-hash",
+		TargetDesiredStateIntentHash: "target-hash",
+	}
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(false, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_EmptyMap(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	channelRepo := NewMockReleaseChannelRepository()
-	cfg := newChannelTestConfig(true, "", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_InvalidMapFormat(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	channelRepo := NewMockReleaseChannelRepository()
-	cfg := newChannelTestConfig(true, "invalid-no-colon", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_SameSourceAndTarget(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v5", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_SourceChannelNotFound(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_TargetChannelNotFound(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_NoCandidates(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("team-alpha", "", "stable-v6", true) // already on target
-	repo.AddInstance("team-beta", "6.2.0", "", true)      // custom version
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-}
-
-func TestChannelReconciler_Start_DeterministicOrder(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("charlie", "", "stable-v5", false)
-	repo.AddInstance("alpha", "", "stable-v5", false)
-	repo.AddInstance("bravo", "", "stable-v5", false)
-
-	repo.SetReadyAfterNCalls("alpha", 1)
-	repo.SetReadyAfterNCalls("bravo", 1)
-	repo.SetReadyAfterNCalls("charlie", 1)
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 5*time.Second)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	require.Len(t, repo.updateCalls, 3)
-	assert.Equal(t, "alpha", repo.updateCalls[0])
-	assert.Equal(t, "bravo", repo.updateCalls[1])
-	assert.Equal(t, "charlie", repo.updateCalls[2])
-}
-
-func TestChannelReconciler_Start_SkipsOtherChannels(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("team-v5", "", "stable-v5", false)
-	repo.AddInstance("team-v6", "", "stable-v6", true) // already on target
-	repo.AddInstance("team-rapid", "", "rapid", true)  // different channel
-
-	repo.SetReadyAfterNCalls("team-v5", 1)
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 5*time.Second)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	require.Len(t, repo.updateCalls, 1)
-	assert.Equal(t, "team-v5", repo.updateCalls[0])
-}
-
-func TestChannelReconciler_MigrateInstance_Success(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	repo.SetReadyAfterNCalls("test-instance", 2)
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 30*time.Second)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	ctx := context.Background()
-	reconciler.Start(ctx)
-
-	require.Len(t, repo.updateCalls, 1)
-	assert.Equal(t, "test-instance", repo.updateCalls[0])
-
-	inst, err := repo.Get(ctx, "test-instance")
+	raw, err := marshalChannelMigrationTransaction(transaction)
 	require.NoError(t, err)
-	assert.Equal(t, "stable-v6", inst.ReleaseChannelName)
-	assert.Empty(t, inst.CustomVersion)
-}
-
-func TestChannelReconciler_MigrateInstance_HealthTimeout_Rollback(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	// Never becomes ready after migration -> timeout -> rollback
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 100*time.Millisecond)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	ctx := context.Background()
-	reconciler.Start(ctx)
-
-	// 1 for migration, 1 for rollback
-	require.Len(t, repo.updateCalls, 2)
-	assert.Equal(t, "test-instance", repo.updateCalls[0])
-	assert.Equal(t, "test-instance", repo.updateCalls[1])
-
-	inst, err := repo.Get(ctx, "test-instance")
+	decoded, err := unmarshalChannelMigrationTransaction(raw)
 	require.NoError(t, err)
-	assert.Equal(t, "stable-v5", inst.ReleaseChannelName)
-	assert.Empty(t, inst.CustomVersion)
+	assert.Equal(t, transaction, decoded)
+
+	var document map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &document))
+	assert.EqualValues(t, channelTransactionSchema, document["schemaVersion"])
+
+	document["schemaVersion"] = channelTransactionSchema + 1
+	unknownVersion, err := json.Marshal(document)
+	require.NoError(t, err)
+	_, err = unmarshalChannelMigrationTransaction(string(unknownVersion))
+	require.Error(t, err)
+
+	transaction.SchemaVersion = channelTransactionSchema
+	transaction.ResourceUID = ""
+	_, err = marshalChannelMigrationTransaction(transaction)
+	require.Error(t, err)
 }
 
-func TestChannelReconciler_SkipsUnhealthyInstances(t *testing.T) {
+func TestChannelReconcilerAdmitsOnlyManagedValidIntentWithinCanaryCap(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", false) // not healthy
+	for _, name := range []string{"alpha", "bravo", "charlie", "invalid", "unmanaged"} {
+		repo.AddInstance(name, "", "stable-v6", true)
+		repo.SetReadyOnChannel(name, "stable-v7", "unleash/unleash-server:7.6.5")
+	}
+	repo.mu.Lock()
+	repo.instances["alpha"].IsReady = false
+	repo.mu.Unlock()
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
+	repo.mu.Lock()
+	delete(repo.crds["invalid"].Annotations, kubernetes.AnnotationDesiredState)
+	delete(repo.crds["unmanaged"].Labels, kubernetes.LabelManagedBy)
+	repo.mu.Unlock()
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
+	channels := channelTestChannels()
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
+	cfg.Unleash.ChannelMigrationMaxCandidates = 2
 
-	reconciler.Start(context.Background())
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	assert.Empty(t, repo.updateCalls)
-
-	stateVal, ok := reconciler.state.Load("test-instance")
-	require.True(t, ok)
-	assert.Equal(t, statusSkippedUnhealthy, stateVal.(*instanceState).status)
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "alpha").ReleaseChannelName)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "bravo").ReleaseChannelName)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "charlie").ReleaseChannelName)
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "invalid").ReleaseChannelName)
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "unmanaged").ReleaseChannelName)
+	assert.Equal(t, []string{"bravo", "charlie"}, repo.updateCalls)
 }
 
-func TestChannelReconciler_UpdateFails(t *testing.T) {
+func TestChannelReconcilerPersistsPinnedCompletedTransactionAndPreservesObjectState(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	repo.updateErr = errUpdateFailed
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
+	repo.mu.Lock()
+	repo.crds["team-a"].Finalizers = []string{"unleash.nais.io/finalizer"}
+	repo.crds["team-a"].Labels["foreign-label"] = "keep"
+	repo.crds["team-a"].Annotations["foreign-annotation"] = "keep"
+	repo.crds["team-a"].Status.Version = "6.4.0"
+	repo.mu.Unlock()
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
+	channels := channelTestChannels()
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	reconciler.Start(context.Background())
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseCompleted, transaction.Phase)
+	assert.Equal(t, types.UID("uid-team-a"), transaction.ResourceUID)
+	assert.Equal(t, "stable-v6", transaction.SourceChannel)
+	assert.Equal(t, types.UID("uid-stable-v6"), transaction.SourceChannelUID)
+	assert.Equal(t, "unleash/unleash-server:6.4.0", transaction.SourceImage)
+	assert.Equal(t, "stable-v7", transaction.TargetChannel)
+	assert.Equal(t, types.UID("uid-stable-v7"), transaction.TargetChannelUID)
+	assert.Equal(t, "unleash/unleash-server:7.6.5", transaction.TargetImage)
+	assert.NotEmpty(t, transaction.DesiredStateIntentHash)
+	assert.NotEmpty(t, transaction.TargetDesiredStateIntentHash)
+	assert.False(t, transaction.Deadline.IsZero())
+	require.Len(t, repo.updateOptions, 1)
+	assert.NotEmpty(t, repo.updateOptions[0].ExpectedResourceVersion)
+	assert.Equal(t, []channelMigrationPhase{phasePrepared, phaseTargetWritten, phaseCompleted}, repo.transactionPhases)
 
-	stateVal, ok := reconciler.state.Load("test-instance")
-	require.True(t, ok)
-	assert.Equal(t, statusFailed, stateVal.(*instanceState).status)
+	crd, err := repo.GetCRD(context.Background(), "team-a")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"unleash.nais.io/finalizer"}, crd.Finalizers)
+	assert.Equal(t, "keep", crd.Labels["foreign-label"])
+	assert.Equal(t, "keep", crd.Annotations["foreign-annotation"])
+	assert.Equal(t, "6.4.0", crd.Status.Version)
 }
 
-func TestChannelReconciler_GetCRDFails(t *testing.T) {
+func TestChannelReconcilerResumesPreparedTransactionAfterTargetWrite(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	repo.getCRDErr = errCRDNotFound
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phasePrepared, time.Now().Add(time.Minute))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
+	repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
+	cfg := newChannelTestConfig(false, "", time.Second)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-
-	stateVal, ok := reconciler.state.Load("test-instance")
-	require.True(t, ok)
-	assert.Equal(t, statusFailed, stateVal.(*instanceState).status)
+	assert.Equal(t, phaseCompleted, mustTransaction(t, repo, "team-a").Phase)
+	assert.Zero(t, repo.updateAttempts, "recovery must recognize the already-written target intent")
 }
 
-func TestChannelReconciler_ContextCancellation(t *testing.T) {
+func TestChannelReconcilerRecoveryRetriesTransientFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		setFailure func(*MockUnleashRepository)
+		clear      func(*MockUnleashRepository)
+	}{
+		{
+			name: "list failure",
+			setFailure: func(repo *MockUnleashRepository) {
+				repo.listErr = errors.New("temporary list failure")
+			},
+			clear: func(repo *MockUnleashRepository) {
+				repo.listErr = nil
+			},
+		},
+		{
+			name: "transaction read failure",
+			setFailure: func(repo *MockUnleashRepository) {
+				repo.getCRDErr = errors.New("temporary read failure")
+			},
+			clear: func(repo *MockUnleashRepository) {
+				repo.getCRDErr = nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := NewMockUnleashRepository()
+			repo.AddInstance("team-a", "", "stable-v6", true)
+			repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
+			channels := channelTestChannels()
+			installTransaction(t, repo, channels, "team-a", phasePrepared, time.Now().Add(time.Minute))
+
+			repo.mu.Lock()
+			test.setFailure(repo)
+			repo.mu.Unlock()
+
+			reconciler := newChannelTestReconciler(repo, channels, newChannelTestConfig(false, "", time.Second))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go reconciler.Recover(ctx)
+
+			time.Sleep(10 * time.Millisecond)
+			repo.mu.Lock()
+			test.clear(repo)
+			repo.mu.Unlock()
+
+			require.Eventually(t, func() bool {
+				transaction, err := transactionFromRepo(repo, "team-a")
+				return err == nil && transaction.Phase == phaseCompleted
+			}, time.Second, 5*time.Millisecond)
+		})
+	}
+}
+
+func TestChannelReconcilerRequiresManualRecoveryOnTargetTimeoutByDefault(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.AddInstance("instance-1", "", "stable-v5", true)
-	repo.AddInstance("instance-2", "", "stable-v5", true)
-	repo.AddInstance("instance-3", "", "stable-v5", true)
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", 25*time.Millisecond)
 
-	repo.SetReadyAfterNCalls("instance-1", 1)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureTargetTimeout, transaction.FailureReason)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Equal(t, 1, repo.updateAttempts)
+}
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 5*time.Second)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
+func TestChannelReconcilerPersistsManualRecoveryWhenTargetWriteFails(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.updateErr = errors.New("target write failed")
+	channels := channelTestChannels()
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
+
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureTargetWrite, transaction.FailureReason)
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Equal(t, 1, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRollsBackOnlyWithExplicitSafeConfiguration(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.SetReadyOnChannel("team-a", "stable-v6", "unleash/unleash-server:6.4.0")
+	channels := channelTestChannels()
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", 25*time.Millisecond)
+	cfg.Unleash.ChannelMigrationRollbackSafe = true
+
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseRolledBack, transaction.Phase)
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Equal(t, 2, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRequiresManualRecoveryWhenPinnedSourceChangesBeforeRollback(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseTargetWritten, time.Now().Add(25*time.Millisecond))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
+	cfg := newChannelTestConfig(false, "", 25*time.Millisecond)
+	cfg.Unleash.ChannelMigrationRollbackSafe = true
+	channels.channels["stable-v6"].Image = "unleash/unleash-server:6.5.0"
+
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureSourceChannelChanged, transaction.FailureReason)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Zero(t, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRequiresManualRecoveryWhenPinnedSourceIsRecreatedBeforeRollback(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseTargetWritten, time.Now().Add(25*time.Millisecond))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
+	cfg := newChannelTestConfig(false, "", 25*time.Millisecond)
+	cfg.Unleash.ChannelMigrationRollbackSafe = true
+	channels.channels["stable-v6"].UID = "replacement-source-uid"
+
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureSourceChannelChanged, transaction.FailureReason)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Zero(t, repo.updateAttempts)
+}
+
+func TestChannelReconcilerRequiresPinnedSourceImageBeforeCompletingRollback(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.SetReadyOnChannel("team-a", "stable-v6", "unleash/unleash-server:6.4.0")
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseRollbackWritten, time.Now().Add(time.Minute))
+	channels.channels["stable-v6"].Image = "unleash/unleash-server:6.5.0"
+
+	cfg := newChannelTestConfig(false, "", time.Second)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureSourceChannelChanged, transaction.FailureReason)
+}
+
+func TestChannelReconcilerNeverRollsBackWithCanceledContext(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Minute)
+	cfg.Unleash.ChannelMigrationRollbackSafe = true
+	reconciler := newChannelTestReconciler(repo, channels, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
-
 	done := make(chan struct{})
 	go func() {
 		reconciler.Start(ctx)
 		close(done)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		transaction, err := transactionFromRepo(repo, "team-a")
+		return err == nil && transaction.Phase == phaseTargetWritten
+	}, time.Second, 5*time.Millisecond)
 	cancel()
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("reconciler did not stop after context cancellation")
+	case <-time.After(time.Second):
+		t.Fatal("channel reconciler did not stop after cancellation")
 	}
 
-	assert.LessOrEqual(t, len(repo.updateCalls), 3)
+	assert.Equal(t, phaseTargetWritten, mustTransaction(t, repo, "team-a").Phase)
+	assert.Equal(t, 1, repo.updateAttempts)
+	assert.Equal(t, "stable-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
 }
 
-func TestChannelReconciler_MultipleInstances_PartialFailure(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("instance-1", "", "stable-v5", true)
-	repo.AddInstance("instance-2", "", "stable-v5", true)
-	repo.AddInstance("instance-3", "", "stable-v5", true)
+func TestChannelReconcilerRetriesConflictsWithFreshSemanticValidation(t *testing.T) {
+	t.Run("annotation conflicts", func(t *testing.T) {
+		repo := NewMockUnleashRepository()
+		repo.AddInstance("team-a", "", "stable-v6", true)
+		repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
+		repo.patchConflicts = 2
+		channels := channelTestChannels()
+		cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
 
-	repo.SetReadyAfterNCalls("instance-1", 1)
-	// instance-2 never becomes ready -> timeout -> rollback
-	repo.SetReadyAfterNCalls("instance-3", 1)
+		newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
+		assert.Equal(t, phaseCompleted, mustTransaction(t, repo, "team-a").Phase)
+		assert.Equal(t, 5, repo.patchAttempts)
+	})
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 100*time.Millisecond)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
+	t.Run("transient conflicts", func(t *testing.T) {
+		repo := NewMockUnleashRepository()
+		repo.AddInstance("team-a", "", "stable-v6", true)
+		repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
+		repo.updateConflicts = 2
+		channels := channelTestChannels()
+		cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
 
-	reconciler.Start(context.Background())
+		newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	state1, _ := reconciler.state.Load("instance-1")
-	state2, _ := reconciler.state.Load("instance-2")
-	state3, _ := reconciler.state.Load("instance-3")
+		assert.Equal(t, phaseCompleted, mustTransaction(t, repo, "team-a").Phase)
+		assert.Equal(t, 3, repo.updateAttempts)
+	})
 
-	assert.Equal(t, statusCompleted, state1.(*instanceState).status)
-	assert.Equal(t, statusRollbackFailed, state2.(*instanceState).status)
-	assert.Equal(t, statusCompleted, state3.(*instanceState).status)
+	t.Run("intent changed during conflict", func(t *testing.T) {
+		repo := NewMockUnleashRepository()
+		repo.AddInstance("team-a", "", "stable-v6", true)
+		repo.SetConflictIntentOnNextUpdate("team-a", validIntent("team-a", "rapid-v7"))
+		channels := channelTestChannels()
+		cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
 
-	ctx := context.Background()
-	inst2, err := repo.Get(ctx, "instance-2")
-	require.NoError(t, err)
-	assert.Equal(t, "stable-v5", inst2.ReleaseChannelName)
+		newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
+
+		assert.Equal(t, phasePrepared, mustTransaction(t, repo, "team-a").Phase)
+		assert.Equal(t, "rapid-v7", mustInstance(t, repo, "team-a").ReleaseChannelName)
+		assert.Equal(t, 1, repo.updateAttempts)
+		assert.Empty(t, repo.updateCalls, "the changed user intent must not be overwritten")
+	})
 }
 
-func TestChannelReconciler_ListError(t *testing.T) {
+func TestChannelReconcilerDetectsPinnedTargetChangeOnRecovery(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.listErr = errListFailed
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseTargetWritten, time.Now().Add(time.Minute))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
+	channels.channels["stable-v7"].Image = "unleash/unleash-server:7.7.0"
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
+	cfg := newChannelTestConfig(false, "", time.Second)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureTargetChannelChanged, transaction.FailureReason)
+	assert.Zero(t, repo.updateAttempts)
 }
 
-func TestChannelReconciler_MultipleChannelMappings(t *testing.T) {
+func TestChannelReconcilerDoesNotAcceptStaleReadyStatusFromSourceImage(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.AddInstance("team-stable-v5", "", "stable-v5", false)
-	repo.AddInstance("team-rapid-v5", "", "rapid-v5", false)
-	repo.AddInstance("team-already-v6", "", "stable-v6", true)
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phaseTargetWritten, time.Now().Add(25*time.Millisecond))
+	setDesiredChannel(t, repo, "team-a", "stable-v7")
 
-	repo.SetReadyAfterNCalls("team-rapid-v5", 1)
-	repo.SetReadyAfterNCalls("team-stable-v5", 1)
+	repo.mu.Lock()
+	repo.instances["team-a"].IsReady = true
+	repo.instances["team-a"].ChannelNameFromStatus = "stable-v6"
+	repo.instances["team-a"].ResolvedImage = "unleash/unleash-server:6.4.0"
+	repo.mu.Unlock()
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-	channelRepo.AddChannel("rapid-v5", "unleash/unleash-server:5.14.0")
-	channelRepo.AddChannel("rapid-v6", "unleash/unleash-server:6.4.0")
+	cfg := newChannelTestConfig(false, "", 25*time.Millisecond)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6,rapid-v5:rapid-v6", 5*time.Second)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	ctx := context.Background()
-	reconciler.Start(ctx)
-
-	require.Len(t, repo.updateCalls, 2)
-	assert.Equal(t, "team-rapid-v5", repo.updateCalls[0])
-	assert.Equal(t, "team-stable-v5", repo.updateCalls[1])
-
-	instRapid, err := repo.Get(ctx, "team-rapid-v5")
-	require.NoError(t, err)
-	assert.Equal(t, "rapid-v6", instRapid.ReleaseChannelName)
-
-	instStable, err := repo.Get(ctx, "team-stable-v5")
-	require.NoError(t, err)
-	assert.Equal(t, "stable-v6", instStable.ReleaseChannelName)
+	transaction := mustTransaction(t, repo, "team-a")
+	assert.Equal(t, phaseManualRecovery, transaction.Phase)
+	assert.Equal(t, failureTargetTimeout, transaction.FailureReason)
 }
 
-func TestChannelReconciler_MultipleChannelMappings_PartialRollback(t *testing.T) {
+func TestChannelReconcilerRefusesTransactionForRecreatedResourceUID(t *testing.T) {
 	repo := NewMockUnleashRepository()
-	repo.AddInstance("team-stable", "", "stable-v5", true)
-	repo.AddInstance("team-rapid", "", "rapid-v5", true)
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phasePrepared, time.Now().Add(time.Minute))
 
-	repo.SetReadyAfterNCalls("team-rapid", 1)
+	repo.mu.Lock()
+	repo.crds["team-a"].UID = "replacement-uid"
+	initialPatchCalls := len(repo.patchCalls)
+	repo.mu.Unlock()
 
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-	channelRepo.AddChannel("rapid-v5", "unleash/unleash-server:5.14.0")
-	channelRepo.AddChannel("rapid-v6", "unleash/unleash-server:6.4.0")
+	cfg := newChannelTestConfig(false, "", time.Second)
+	newChannelTestReconciler(repo, channels, cfg).Start(context.Background())
 
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6,rapid-v5:rapid-v6", 100*time.Millisecond)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	ctx := context.Background()
-	reconciler.Start(ctx)
-
-	stateRapid, _ := reconciler.state.Load("team-rapid")
-	stateStable, _ := reconciler.state.Load("team-stable")
-
-	assert.Equal(t, statusCompleted, stateRapid.(*instanceState).status)
-	assert.Equal(t, statusRollbackFailed, stateStable.(*instanceState).status)
-
-	instStable, err := repo.Get(ctx, "team-stable")
-	require.NoError(t, err)
-	assert.Equal(t, "stable-v5", instStable.ReleaseChannelName)
-
-	instRapid, err := repo.Get(ctx, "team-rapid")
-	require.NoError(t, err)
-	assert.Equal(t, "rapid-v6", instRapid.ReleaseChannelName)
-}
-
-func TestChannelReconciler_MigrateInstance_GetFails(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	repo.getErr = errors.New("get failed")
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", testHealthTimeout)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	assert.Empty(t, repo.updateCalls)
-
-	stateVal, ok := reconciler.state.Load("test-instance")
-	require.True(t, ok)
-	assert.Equal(t, statusFailed, stateVal.(*instanceState).status)
-}
-
-func TestChannelReconciler_Rollback_GetCRDFails(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	repo.getCRDErr = errCRDNotFound
-	repo.getCRDFailAfterN = 1 // first GetCRD (migration) succeeds, second (rollback) fails
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 100*time.Millisecond)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	require.Len(t, repo.updateCalls, 1)
-
-	stateVal, ok := reconciler.state.Load("test-instance")
-	require.True(t, ok)
-	assert.Equal(t, statusRollbackFailed, stateVal.(*instanceState).status)
-
-	inst, _ := repo.Get(context.Background(), "test-instance")
-	assert.Equal(t, "stable-v6", inst.ReleaseChannelName) // stuck on target since rollback failed
-}
-
-func TestChannelReconciler_Rollback_UpdateFails(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("test-instance", "", "stable-v5", true)
-	repo.updateErr = errUpdateFailed
-	repo.updateFailAfterN = 1 // first Update (migration) succeeds, second (rollback) fails
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 100*time.Millisecond)
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	require.Len(t, repo.updateCalls, 1) // only migration update succeeded
-
-	stateVal, ok := reconciler.state.Load("test-instance")
-	require.True(t, ok)
-	assert.Equal(t, statusRollbackFailed, stateVal.(*instanceState).status)
-
-	inst, _ := repo.Get(context.Background(), "test-instance")
-	assert.Equal(t, "stable-v6", inst.ReleaseChannelName) // stuck on target since rollback update failed
-}
-
-func TestChannelReconciler_Start_WithMigrationDelay(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("alpha", "", "stable-v5", false)
-	repo.AddInstance("bravo", "", "stable-v5", false)
-
-	repo.SetReadyAfterNCalls("alpha", 1)
-	repo.SetReadyAfterNCalls("bravo", 1)
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 5*time.Second)
-	cfg.Unleash.ChannelMigrationDelay = 10 * time.Millisecond
-
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	reconciler.Start(context.Background())
-
-	require.Len(t, repo.updateCalls, 2)
-	assert.Equal(t, "alpha", repo.updateCalls[0])
-	assert.Equal(t, "bravo", repo.updateCalls[1])
-}
-
-func TestChannelReconciler_ContextCancellation_DuringDelay(t *testing.T) {
-	repo := NewMockUnleashRepository()
-	repo.AddInstance("alpha", "", "stable-v5", false)
-	repo.AddInstance("bravo", "", "stable-v5", false)
-
-	repo.SetReadyAfterNCalls("alpha", 1)
-	repo.SetReadyAfterNCalls("bravo", 1)
-
-	channelRepo := NewMockReleaseChannelRepository()
-	channelRepo.AddChannel("stable-v5", "unleash/unleash-server:5.12.0")
-	channelRepo.AddChannel("stable-v6", "unleash/unleash-server:6.3.0")
-
-	cfg := newChannelTestConfig(true, "stable-v5:stable-v6", 5*time.Second)
-	cfg.Unleash.ChannelMigrationDelay = 5 * time.Second // long delay to ensure cancellation during it
-
-	reconciler := newChannelTestReconciler(repo, channelRepo, cfg)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	done := make(chan struct{})
-	go func() {
-		reconciler.Start(ctx)
-		close(done)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("reconciler did not stop during migration delay")
-	}
-
-	require.Len(t, repo.updateCalls, 1)
-	assert.Equal(t, "alpha", repo.updateCalls[0])
+	assert.Equal(t, phasePrepared, mustTransaction(t, repo, "team-a").Phase)
+	assert.Len(t, repo.patchCalls, initialPatchCalls)
+	assert.Zero(t, repo.updateAttempts)
 }
 
 func TestParseChannelMigrationMap(t *testing.T) {
@@ -574,68 +460,142 @@ func TestParseChannelMigrationMap(t *testing.T) {
 		want    map[string]string
 		wantErr bool
 	}{
-		{
-			name:  "empty",
-			input: "",
-			want:  map[string]string{},
-		},
-		{
-			name:  "single mapping",
-			input: "stable-v5:stable-v6",
-			want:  map[string]string{"stable-v5": "stable-v6"},
-		},
+		{name: "empty", input: "", want: map[string]string{}},
+		{name: "single mapping", input: "stable-v6:stable-v7", want: map[string]string{"stable-v6": "stable-v7"}},
 		{
 			name:  "multiple mappings",
-			input: "stable-v5:stable-v6,rapid-v5:rapid-v6",
-			want:  map[string]string{"stable-v5": "stable-v6", "rapid-v5": "rapid-v6"},
+			input: "stable-v6:stable-v7,rapid-v6:rapid-v7",
+			want:  map[string]string{"stable-v6": "stable-v7", "rapid-v6": "rapid-v7"},
 		},
 		{
 			name:  "whitespace handling",
-			input: " stable-v5 : stable-v6 , rapid-v5 : rapid-v6 ",
-			want:  map[string]string{"stable-v5": "stable-v6", "rapid-v5": "rapid-v6"},
+			input: " stable-v6 : stable-v7 , rapid-v6 : rapid-v7 ",
+			want:  map[string]string{"stable-v6": "stable-v7", "rapid-v6": "rapid-v7"},
 		},
-		{
-			name:  "trailing comma",
-			input: "stable-v5:stable-v6,",
-			want:  map[string]string{"stable-v5": "stable-v6"},
-		},
-		{
-			name:    "missing colon",
-			input:   "invalid-entry",
-			wantErr: true,
-		},
-		{
-			name:    "empty source",
-			input:   ":stable-v6",
-			wantErr: true,
-		},
-		{
-			name:    "empty target",
-			input:   "stable-v5:",
-			wantErr: true,
-		},
-		{
-			name:    "same source and target",
-			input:   "stable-v5:stable-v5",
-			wantErr: true,
-		},
-		{
-			name:    "duplicate source",
-			input:   "stable-v5:stable-v6,stable-v5:rapid-v6",
-			wantErr: true,
-		},
+		{name: "missing colon", input: "invalid-entry", wantErr: true},
+		{name: "empty source", input: ":stable-v7", wantErr: true},
+		{name: "empty target", input: "stable-v6:", wantErr: true},
+		{name: "same source and target", input: "stable-v6:stable-v6", wantErr: true},
+		{name: "duplicate source", input: "stable-v6:stable-v7,stable-v6:rapid-v7", wantErr: true},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.UnleashConfig{ChannelMigrationMap: tt.input}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &config.UnleashConfig{ChannelMigrationMap: test.input}
 			got, err := cfg.ParseChannelMigrationMap()
-			if tt.wantErr {
-				assert.Error(t, err)
+			if test.wantErr {
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, test.want, got)
 		})
 	}
+}
+
+func channelTestChannels() *MockReleaseChannelRepository {
+	channels := NewMockReleaseChannelRepository()
+	channels.AddChannel("stable-v6", "unleash/unleash-server:6.4.0")
+	channels.AddChannel("stable-v7", "unleash/unleash-server:7.6.5")
+	return channels
+}
+
+func validIntent(name, channel string) *unleash.Config {
+	return &unleash.Config{
+		Name:                      name,
+		ReleaseChannelName:        channel,
+		LogLevel:                  "warn",
+		DatabasePoolMax:           3,
+		DatabasePoolIdleTimeoutMs: 1000,
+	}
+}
+
+func installTransaction(
+	t *testing.T,
+	repo *MockUnleashRepository,
+	channels *MockReleaseChannelRepository,
+	name string,
+	phase channelMigrationPhase,
+	deadline time.Time,
+) {
+	t.Helper()
+	crd, err := repo.GetCRD(context.Background(), name)
+	require.NoError(t, err)
+	source, sourceHash, err := loadDesiredStateIntent(crd)
+	require.NoError(t, err)
+	_, targetHash, err := targetIntent(source, "stable-v7")
+	require.NoError(t, err)
+	target := channels.channels["stable-v7"]
+	sourceChannel := channels.channels[source.ReleaseChannelName]
+	transaction := &channelMigrationTransaction{
+		SchemaVersion:                channelTransactionSchema,
+		ResourceUID:                  crd.UID,
+		Phase:                        phase,
+		Deadline:                     deadline.UTC(),
+		SourceChannel:                source.ReleaseChannelName,
+		SourceChannelUID:             sourceChannel.UID,
+		SourceImage:                  sourceChannel.Image,
+		TargetChannel:                target.Name,
+		TargetChannelUID:             target.UID,
+		TargetImage:                  target.Image,
+		DesiredStateIntentHash:       sourceHash,
+		TargetDesiredStateIntentHash: targetHash,
+	}
+	raw, err := marshalChannelMigrationTransaction(transaction)
+	require.NoError(t, err)
+	require.NoError(t, repo.PatchAnnotations(
+		context.Background(),
+		crd,
+		map[string]*string{channelMigrationAnnotation: &raw},
+	))
+}
+
+func setDesiredChannel(t *testing.T, repo *MockUnleashRepository, name, channel string) {
+	t.Helper()
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	repo.setIntentLocked(name, validIntent(name, channel))
+}
+
+func mustTransaction(t *testing.T, repo *MockUnleashRepository, name string) *channelMigrationTransaction {
+	t.Helper()
+	transaction, err := transactionFromRepo(repo, name)
+	require.NoError(t, err)
+	return transaction
+}
+
+func transactionFromRepo(repo *MockUnleashRepository, name string) (*channelMigrationTransaction, error) {
+	crd, err := repo.GetCRD(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalChannelMigrationTransaction(crd.Annotations[channelMigrationAnnotation])
+}
+
+func mustInstance(t *testing.T, repo *MockUnleashRepository, name string) *unleash.Instance {
+	t.Helper()
+	instance, err := repo.Get(context.Background(), name)
+	require.NoError(t, err)
+	return instance
+}
+
+func TestChannelMigrationMarkerPreservesForeignMetadataShape(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.mu.Lock()
+	repo.crds["team-a"].OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "unleasherator.nais.io/v1",
+		Kind:       "RemoteUnleash",
+		Name:       "team-a-remote",
+		UID:        "remote-uid",
+	}}
+	repo.mu.Unlock()
+
+	channels := channelTestChannels()
+	installTransaction(t, repo, channels, "team-a", phasePrepared, time.Now().Add(time.Minute))
+
+	crd, err := repo.GetCRD(context.Background(), "team-a")
+	require.NoError(t, err)
+	require.Len(t, crd.OwnerReferences, 1)
+	assert.Equal(t, "team-a-remote", crd.OwnerReferences[0].Name)
 }

@@ -130,14 +130,18 @@ backend:
       healthTimeout: "5m"
       delay: "30s"
 
-    # Channel migration settings for transitioning between release channels (e.g., v5 to v6)
+    # Channel migration settings for transitioning between release channels (e.g., v6 to v7)
     # This is useful for major version upgrades across all instances on a specific channel
     channelMigration:
       enabled: false
-      # Comma-separated list of source:target channel pairs, e.g. "stable-v5:stable-v6,rapid-v5:rapid-v6"
+      # Comma-separated list of source:target channel pairs, e.g. "stable-v6:stable-v7,rapid-v6:rapid-v7"
       map: ""
       healthTimeout: "5m"
       delay: "30s"
+      # New transactions admitted per Bifrost start. Existing markers are always recovered.
+      maxCandidates: 1
+      # Set only when target-to-source database downgrade is explicitly known to be safe.
+      rollbackSafe: false
 
 
   google:

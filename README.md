@@ -175,6 +175,17 @@ Bifröst is configured via environment variables.
 | `BIFROST_UNLEASH_INSTANCE_API_INGRESS_HOST`  | The ingress host for Unleash instances API                    |
 | `BIFROST_UNLEASH_INSTANCE_API_INGRESS_CLASS` | The ingress class for Unleash instances API                   |
 
+### Channel migration
+
+Channel migrations use the authoritative `bifrost.nais.io/desired-state`
+annotation and persist progress in `bifrost.nais.io/channel-migration`.
+`BIFROST_UNLEASH_CHANNEL_MIGRATION_MAX_CANDIDATES` limits new transactions per
+process start; existing transactions are always recovered. Automatic rollback
+is disabled unless `BIFROST_UNLEASH_CHANNEL_MIGRATION_ROLLBACK_SAFE=true`
+explicitly declares the database downgrade safe. Target write failures and
+timeouts otherwise persist the `manual-recovery-required` phase for operator
+action.
+
 ## Development
 
 ### Prerequisites
