@@ -31,9 +31,9 @@ const (
 // An instance without the annotation has no recorded intent, so the only thing
 // available to render from is LoadConfigFromCRD — a lossy read-back of the live
 // spec. It is reported as would_change and never applied, whatever dry-run says,
-// so the adopted-but-never-stamped fleet is counted separately from instances
-// that carry an intent and genuinely drifted from it. The drifting spec sections
-// are still on the log line; only the metric collapses them into this reason.
+// so legacy candidates are distinguished from instances that carry an intent
+// and genuinely drifted from it. The drifting spec sections are still on the
+// log line; only the metric collapses them into this reason.
 
 var reconcilerActionsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
@@ -96,66 +96,39 @@ var instancesUpdatedTimestamp = prometheus.NewGauge(
 	},
 )
 
-// Adoption outcomes. Kept off reconcilerActionsTotal deliberately: that counter
-// means "a reconcile happened and here is what it did", and adoption is not a
-// reconcile — it is the metadata write that lets one happen at all. Mixing them
-// would make sum(rate(actions_total)) stop meaning reconciles, and would put a
-// one-off migration spike inside the series the dark launch is read from.
-// The series do not count the same thing, and the Help string says so: an
-// instance is stamped once, but a failed or health-deferred stamp is retried on
-// every sweep, so those series count attempts and can exceed the number of
-// instances involved. Reading a migration therefore means reading adopted as a
-// total (one per instance, and at most one per sweep) and unhealthy as a rate:
-// a steady non-zero unhealthy rate with a flat adopted total is a fleet that
-// never becomes eligible, which looks exactly like a finished migration if only
-// the total is watched.
 const (
-	adoptionAdopted   = "adopted"
-	adoptionError     = "error"
-	adoptionPreviewed = "previewed"
-	adoptionVerified  = "verified"
-	adoptionRefused   = "refused"
+	adoptionEventAdmitted               = "admitted"
+	adoptionEventBlockedMultiplePending = "blocked_multiple_pending"
+	adoptionEventBlockedUnknownMarker   = "blocked_unknown_marker"
+	adoptionEventDryRun                 = "dry_run"
+	adoptionEventError                  = "error"
+	adoptionEventRefusedInvalidIntent   = "refused_invalid_intent"
+	adoptionEventVerified               = "verified"
+	adoptionEventWaitingDeletion        = "waiting_deletion"
+	adoptionEventWaitingHealthy         = "waiting_healthy"
+	adoptionEventYieldedToMigration     = "yielded_to_channel_migration"
 )
 
-// adoptionsTotal makes "65 instances were adopted" an event that was observed
-// rather than one inferred afterwards from unmanagedInstances falling as
-// managedInstances rises. It is also what tells the two apart during a
-// migration: instances left unmanaged after a sweep are opted out or failed to
-// stamp, and only the error series says which.
-var adoptionsTotal = prometheus.NewCounterVec(
+var adoptionRemaining = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "bifrost_reconciler_adoption_remaining",
+		Help: "Bifrost-managed Unleash CRs without a valid desired-state intent.",
+	},
+)
+
+var adoptionPending = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "bifrost_reconciler_adoption_pending",
+		Help: "Current number of CRs carrying the legacy-adoption pending marker.",
+	},
+)
+
+var adoptionEventsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
-		Name: "bifrost_reconciler_adoptions_total",
-		Help: "Full legacy-adoption outcomes. adopted creates a pending UID-bound transaction, verified confirms current-generation health, previewed performs no writes, refused skips an unsafe source shape, and error blocks progression.",
+		Name: "bifrost_reconciler_adoption_events_total",
+		Help: "Legacy adoption events. The result label has a fixed, bounded set and never identifies an instance.",
 	},
 	[]string{"result"},
-)
-
-var adoptionPendingVerification = prometheus.NewGauge(
-	prometheus.GaugeOpts{
-		Name: "bifrost_reconciler_adoption_pending_verification",
-		Help: "1 while a fully adopted legacy Unleash instance must report current-generation health before the next adoption.",
-	},
-)
-
-// The checkpoint state explains why the adopted counter has stopped changing.
-// It is a bounded gauge rather than an instance-labelled metric, so it stays
-// usable for the entire tenant fleet.
-const (
-	adoptionStateIdle             = "idle"
-	adoptionStatePreview          = "preview"
-	adoptionStatePending          = "pending"
-	adoptionStateVerified         = "verified"
-	adoptionStateFailed           = "failed"
-	adoptionStateBlocked          = "blocked"
-	adoptionStateWaitingMigration = "waiting_channel_migration"
-)
-
-var adoptionCheckpointState = prometheus.NewGaugeVec(
-	prometheus.GaugeOpts{
-		Name: "bifrost_reconciler_adoption_checkpoint_state",
-		Help: "Current durable legacy-adoption checkpoint state. Exactly one bounded state is 1 after each adoption sweep.",
-	},
-	[]string{"state"},
 )
 
 func init() {
@@ -164,9 +137,9 @@ func init() {
 		managedInstances,
 		unmanagedInstances,
 		instancesUpdatedTimestamp,
-		adoptionsTotal,
-		adoptionPendingVerification,
-		adoptionCheckpointState,
+		adoptionRemaining,
+		adoptionPending,
+		adoptionEventsTotal,
 	)
 }
 
@@ -177,20 +150,6 @@ func recordAction(action, reason string) {
 	reconcilerActionsTotal.WithLabelValues(action, reason).Inc()
 }
 
-func setAdoptionCheckpointState(state string) {
-	for _, candidate := range []string{
-		adoptionStateIdle,
-		adoptionStatePreview,
-		adoptionStatePending,
-		adoptionStateVerified,
-		adoptionStateFailed,
-		adoptionStateBlocked,
-		adoptionStateWaitingMigration,
-	} {
-		value := 0.0
-		if candidate == state {
-			value = 1
-		}
-		adoptionCheckpointState.WithLabelValues(candidate).Set(value)
-	}
+func recordAdoptionEvent(result string) {
+	adoptionEventsTotal.WithLabelValues(result).Inc()
 }

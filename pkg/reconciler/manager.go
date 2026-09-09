@@ -106,7 +106,8 @@ func instanceNamespace(cfg *config.Config) (string, error) {
 }
 
 // checkAdoptionConfiguration mirrors Config.Validate at the point where the
-// writer is constructed, so a future caller cannot create an unsafe manager.
+// writer is constructed, so a future caller cannot run adoption alongside a
+// migration admission path.
 func checkAdoptionConfiguration(cfg *config.Config) error {
 	if cfg.Reconciler.AutoAdopt && !cfg.Reconciler.Enabled {
 		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_ENABLED=true")

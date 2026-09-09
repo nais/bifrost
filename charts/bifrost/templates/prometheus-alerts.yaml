@@ -146,40 +146,15 @@ spec:
           action: "Check controller-runtime logs and reconcile action metrics by reason."
 
       - alert: BifrostAdoptionPendingVerification
-        expr: bifrost_reconciler_adoption_pending_verification > 0
+        expr: bifrost_reconciler_adoption_pending > 0
         for: 30m
         labels:
           severity: warning
           namespace: {{ .Release.Namespace }}
         annotations:
-          summary: "Bifrost is waiting for a fully adopted Unleash instance to become healthy"
+          summary: "Bifrost is waiting for legacy adoption health verification"
           consequence: "Progressive adoption cannot start another instance until the pending CR reports Reconciled=True and Connected=True for its current generation."
-          action: "Find the pending instance in bifrost-backend logs, inspect its Unleash CR conditions and workload, and do not enable migration admission until it is verified."
-
-      # Adoption stamps one instance per sweep, so a sustained error rate means
-      # instances are being left invisible to the reconciler rather than a
-      # transient 409.
-      - alert: BifrostAdoptionFailing
-        expr: sum(rate(bifrost_reconciler_adoptions_total{result="error"}[15m])) > 0
-        for: 30m
-        labels:
-          severity: warning
-          namespace: {{ .Release.Namespace }}
-        annotations:
-          summary: "Bifrost keeps failing to adopt Unleash instances"
-          consequence: "Bifrost has stopped the current UID-bound checkpoint or cannot persist its source snapshot and target hashes."
-          action: "Check bifrost-backend logs and the bifrost-legacy-adoption ConfigMap. Do not delete or replace the ConfigMap; restore its checkpoint or resolve the recorded manual-recovery state."
-
-      - alert: BifrostAdoptionCheckpointBlocked
-        expr: max(bifrost_reconciler_adoption_checkpoint_state{state=~"failed|blocked"}) > 0
-        for: 5m
-        labels:
-          severity: critical
-          namespace: {{ .Release.Namespace }}
-        annotations:
-          summary: "Bifrost legacy adoption checkpoint requires manual recovery"
-          consequence: "No further legacy CR will be canonicalized until the UID, source snapshot, target hashes and ConfigMap binding are safe again."
-          action: "Inspect bifrost-legacy-adoption and the named Unleash CR. Do not remove the CR marker or checkpoint to bypass the gate; restore a known-good checkpoint or disable autoAdopt and recover manually."
+          action: "Inspect the pending Unleash CR conditions and workload. Do not enable channel migration admission until its adoption marker is cleared."
 
     - name: bifrost_auth_alerts
       rules:

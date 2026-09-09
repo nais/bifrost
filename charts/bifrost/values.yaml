@@ -33,15 +33,10 @@ backend:
 
   # Reconcile loop that converges managed Unleash instances to their desired
   # config. Dark-launched: enable with dryRun=true first, watch
-  # bifrost_reconciler_actions_total{action="would_change"} — the reason label
-  # says whether that is spec drift or metadata backfill — then set dryRun=false.
-  # Legacy adoption is a separately gated, progressive rollout. With autoAdopt
-  # on and dryRun true, Bifrost plans the next explicit opt-in without writes.
-  # With dryRun false, it writes a UID-bound ConfigMap checkpoint before
-  # canonicalizing one CR, then waits for current-generation Reconciled=True
-  # and Connected=True before it starts another. A missing, stale or failed
-  # checkpoint stops the fleet for manual recovery. It is incompatible with
-  # either migration admission mode and yields to channel-migration markers.
+  # bifrost_reconciler_actions_total{action="would_change"}, then set dryRun=false.
+  # Legacy adoption is separately gated. It canonicalizes one managed CR that
+  # lacks valid desired state, then waits for current-generation health before
+  # admitting the next. It yields to channel-migration transactions.
   reconciler:
     # Chart default stays off so a bare `helm install` does not start a control
     # loop unannounced. Fasit sets it on for every environment via Feature.yaml,
@@ -49,15 +44,13 @@ backend:
     # opt-in is written down.
     enabled: false
     # Defaults to observe-only, so enabling the reconciler cannot start
-    # writing by accident. With autoAdopt enabled, this previews full adoption.
+    # writing by accident. With autoAdopt enabled, this previews the next
+    # deterministic legacy candidate.
     dryRun: true
-    # Progressively fully adopt only CRs labelled bifrost.nais.io/adopt=true.
-    # The pure compatibility plan refuses manual/unknown shapes rather than
-    # deleting their fields. The supported canonicalization contract owns
-    # version source, size, metrics, ingress, federation, seven Bifrost env
-    # vars, and the sql-proxy sidecar. Database, network policy, resources,
-    # service account, volumes and pod metadata must already be canonical.
-    # Chart default off so a bare `helm install` does not modify legacy CRs.
+    # Progressively adopt Bifrost-managed CRs missing valid desired state.
+    # A CR-local pending marker remains until Unleasherator reports
+    # current-generation Reconciled=True and Connected=True. Chart default off
+    # so a bare `helm install` does not modify legacy CRs.
     autoAdopt: false
     resyncInterval: "10m"
 

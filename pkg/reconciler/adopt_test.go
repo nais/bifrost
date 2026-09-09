@@ -3,37 +3,43 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/nais/bifrost/pkg/config"
+	"github.com/nais/bifrost/pkg/domain/unleash"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func legacyInstance(t *testing.T, name string) *unleashv1.Unleash {
 	t.Helper()
+
 	rendered := renderManaged(t, name)
 	legacy := rendered.DeepCopy()
-	delete(legacy.Labels, kubernetes.LabelManagedBy)
+	legacy.Spec.CustomImage = ""
+	legacy.Spec.ReleaseChannel.Name = "unleash-v6"
+	legacy.Spec.Federation.Enabled = true
+	legacy.Spec.Federation.SecretNonce = "legacy-nonce"
 	delete(legacy.Annotations, kubernetes.AnnotationDesiredState)
-	legacy.Labels[kubernetes.LabelAdopt] = kubernetes.AdoptOptIn
 	legacy.UID = types.UID(name + "-uid")
 	legacy.Generation = 1
 	return legacy
 }
 
-func fullAdopter(c client.Client, cfg *config.Config, dryRun bool) *UnleashReconciler {
+func adoptionReconciler(c client.Client, autoAdopt, dryRun bool) *UnleashReconciler {
+	cfg := testConfig()
+	return adoptionReconcilerForConfig(c, cfg, autoAdopt, dryRun)
+}
+
+func adoptionReconcilerForConfig(c client.Client, cfg *config.Config, autoAdopt, dryRun bool) *UnleashReconciler {
+	cfg.Reconciler.AutoAdopt = autoAdopt
 	logger := logrus.New()
 	logger.SetOutput(nopWriter{})
 	return NewUnleashReconciler(c, cfg, logger, time.Minute, dryRun)
@@ -46,28 +52,6 @@ func get(t *testing.T, c client.Client, namespace, name string) *unleashv1.Unlea
 		t.Fatal(err)
 	}
 	return crd
-}
-
-func newFakeClientWith(t *testing.T, functions interceptor.Funcs, objects ...client.Object) client.Client {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	if err := addSchemeForTest(scheme); err != nil {
-		t.Fatal(err)
-	}
-	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(functions).Build()
-}
-
-func getCheckpoint(t *testing.T, c client.Client, namespace string) (*corev1.ConfigMap, *adoptionCheckpoint) {
-	t.Helper()
-	configMap := &corev1.ConfigMap{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: adoptionCheckpointName}, configMap); err != nil {
-		t.Fatal(err)
-	}
-	checkpoint, err := checkpointFromConfigMap(configMap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return configMap, checkpoint
 }
 
 func setCurrentCondition(crd *unleashv1.Unleash, condition string, status metav1.ConditionStatus) {
@@ -86,65 +70,172 @@ func makeCurrentGenerationHealthy(t *testing.T, c client.Client, crd *unleashv1.
 	}
 }
 
-func TestFullAdoption_WritesCanonicalTargetAndDurableCheckpoint(t *testing.T) {
-	crd := legacyInstance(t, "team-adopt")
-	crd.Spec.Size = 3
+func findEnv(crd *unleashv1.Unleash, name string) (corev1.EnvVar, bool) {
+	for _, env := range crd.Spec.ExtraEnvVars {
+		if env.Name == name {
+			return env, true
+		}
+	}
+	return corev1.EnvVar{}, false
+}
+
+func historicalDevNaisConfig() *config.Config {
+	cfg := testConfig()
+	cfg.Google.ProjectID = "nais-management-7178"
+	cfg.Unleash.InstanceServiceaccount = "bifrost-unleash-sql-user"
+	cfg.Unleash.SQLInstanceID = "bifrost-79ca6928"
+	cfg.Unleash.SQLInstanceRegion = "europe-north1"
+	cfg.Unleash.SQLInstanceAddress = "34.88.153.80"
+	cfg.Unleash.InstanceWebIngressHost = "unleash-web.iap.dev-nais.cloud.nais.io"
+	cfg.Unleash.InstanceWebIngressClass = "external-fa-haproxy"
+	cfg.Unleash.InstanceAPIIngressHost = "unleash-api.dev-nais.cloud.nais.io"
+	cfg.Unleash.InstanceAPIIngressClass = "internal-haproxy"
+	cfg.Unleash.InstanceWebOAuthJWTAudience = "320980366213075636"
+	return cfg
+}
+
+func historicalDevNaisV6(t *testing.T) *unleashv1.Unleash {
+	t.Helper()
+
+	intent, err := unleash.NewConfigBuilder().
+		WithName("migration-test-v5").
+		WithReleaseChannel("unleash-v6").
+		WithFederation("kyi03r99", "", "unleasherator-federation-canary", "dev").
+		Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := kubernetes.BuildUnleashCRD(historicalDevNaisConfig(), intent)
+	delete(legacy.Annotations, kubernetes.AnnotationDesiredState)
+	legacy.Labels["unleasherator.nais.io/federation-replay"] = "1785933988-3473-25"
+	legacy.UID = types.UID("3bd4c7b5-bcf9-480c-a240-a77b8933d236")
+	legacy.Generation = 6
+	legacy.Spec.NetworkPolicy.ExtraEgressRules = legacy.Spec.NetworkPolicy.ExtraEgressRules[:1]
+	legacy.Spec.ExtraEnvVars = []corev1.EnvVar{
+		{Name: "OAUTH_JWT_AUDIENCE", Value: "320980366213075636"},
+		{Name: "OAUTH_JWT_AUTH", Value: "true"},
+		{Name: "TEAMS_API_URL", Value: "https://console.dev-nais.cloud.nais.io/graphql"},
+		{
+			Name: "TEAMS_API_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "teams-api-token"},
+					Key:                  "token",
+				},
+			},
+		},
+		{Name: "TEAMS_ALLOWED_TEAMS"},
+		{Name: "LOG_LEVEL", Value: "warn"},
+		{Name: "DATABASE_POOL_MAX", Value: "3"},
+		{Name: "DATABASE_POOL_IDLE_TIMEOUT_MS", Value: "1000"},
+	}
+	legacy.Status.Conditions = []metav1.Condition{
+		{
+			Type:               unleashv1.UnleashStatusConditionTypeReconciled,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: legacy.Generation,
+		},
+		{
+			Type:   unleashv1.UnleashStatusConditionTypeConnected,
+			Status: metav1.ConditionFalse,
+		},
+	}
+	return &legacy
+}
+
+func TestLegacyAdoptionCanonicalizesHistoricalV6(t *testing.T) {
+	crd := historicalDevNaisV6(t)
 	c := newFakeClient(t, crd)
 
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
+	adoptionReconcilerForConfig(c, historicalDevNaisConfig(), true, false).adoptFleet(context.Background())
 
 	live := get(t, c, crd.Namespace, crd.Name)
-	if !kubernetes.IsManagedByBifrost(live) || live.Annotations[kubernetes.AnnotationDesiredState] == "" {
-		t.Fatal("full adoption did not atomically establish managed metadata and desired state")
+	if live.Spec.ReleaseChannel.Name != "unleash-v6" || live.Spec.CustomImage != "" {
+		t.Fatalf("version source = customImage %q, release channel %q; want release channel unleash-v6",
+			live.Spec.CustomImage, live.Spec.ReleaseChannel.Name)
 	}
-	if live.Spec.Size != 1 {
-		t.Errorf("canonical spec was not applied, size = %d", live.Spec.Size)
+	if !live.Spec.Federation.Enabled ||
+		live.Spec.Federation.SecretNonce != "kyi03r99" ||
+		len(live.Spec.Federation.Namespaces) != 1 ||
+		live.Spec.Federation.Namespaces[0] != "unleasherator-federation-canary" ||
+		len(live.Spec.Federation.Clusters) != 1 ||
+		live.Spec.Federation.Clusters[0] != "dev" {
+		t.Fatalf("federation identity was not preserved: %#v", live.Spec.Federation)
 	}
-	configMap, checkpoint := getCheckpoint(t, c, crd.Namespace)
-	if checkpoint.Phase != adoptionTargetWritten || checkpoint.ResourceUID != live.UID {
-		t.Fatalf("checkpoint = %#v, want target-written checkpoint for %q", checkpoint, live.UID)
+	if len(live.Spec.NetworkPolicy.ExtraEgressRules) != 2 {
+		t.Fatalf("network policy egress rules = %d, want Cloud SQL and NAIS API", len(live.Spec.NetworkPolicy.ExtraEgressRules))
 	}
-	if kubernetes.HashBytes(checkpoint.SourceSpec) != checkpoint.SourceSpecSHA256 {
-		t.Fatal("checkpoint did not durably bind its source snapshot to its hash")
+	if got := live.Spec.NetworkPolicy.ExtraEgressRules[0].To[0].IPBlock.CIDR; got != "34.88.153.80/32" {
+		t.Fatalf("Cloud SQL network policy CIDR = %q, want 34.88.153.80/32", got)
 	}
-	record, present, err := adoptionRecord(live)
-	if err != nil || !present || record.Phase != kubernetes.AdoptionPending {
-		t.Fatalf("adoption marker = %#v, %v, present=%t", record, err, present)
+	if got := live.Spec.NetworkPolicy.ExtraEgressRules[1].To[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]; got != "nais-system" {
+		t.Fatalf("NAIS API network policy namespace = %q, want nais-system", got)
 	}
-	if err := checkpointMatchesRecord(checkpoint, configMap, record); err != nil {
-		t.Fatalf("CR marker does not bind the ConfigMap checkpoint: %v", err)
+	if _, found := findEnv(live, "TEAMS_API_URL"); found {
+		t.Fatal("legacy TEAMS_API_URL was retained")
 	}
-	if !kubernetes.MatchesAdoptionTarget(record, live) {
-		t.Fatal("CR marker target hashes do not match the canonicalized target")
+	if _, found := findEnv(live, "TEAMS_API_TOKEN"); found {
+		t.Fatal("legacy TEAMS_API_TOKEN was retained")
+	}
+	naisAPIAddress, found := findEnv(live, "NAIS_API_ADDRESS")
+	if !found || naisAPIAddress.Value != "nais-api.nais-system:3001" || naisAPIAddress.ValueFrom != nil {
+		t.Fatalf("NAIS_API_ADDRESS = %#v, want current literal address", naisAPIAddress)
+	}
+
+	intent, present, err := recordedIntent(live)
+	if err != nil || !present {
+		t.Fatalf("desired-state intent = %#v, present=%t, err=%v", intent, present, err)
+	}
+	if intent.ReleaseChannelName != "unleash-v6" || !intent.EnableFederation ||
+		intent.AllowedTeams != "" ||
+		intent.AllowedNamespaces != "unleasherator-federation-canary" ||
+		intent.AllowedClusters != "dev" {
+		t.Fatalf("desired-state identity = %#v", intent)
+	}
+	if live.Labels[kubernetes.LabelManagedBy] != kubernetes.ManagedByBifrost {
+		t.Fatal("canonical CR is missing Bifrost ownership label")
+	}
+	if live.Labels["unleasherator.nais.io/federation-replay"] != "1785933988-3473-25" {
+		t.Fatal("unleasherator metadata was not preserved")
+	}
+	if live.Annotations[kubernetes.AnnotationAdoption] != adoptionPendingMarker {
+		t.Fatalf("adoption marker = %q, want pending", live.Annotations[kubernetes.AnnotationAdoption])
 	}
 }
 
-func TestFullAdoption_WaitsForVerificationBeforeNextCandidate(t *testing.T) {
+func TestLegacyAdoptionProgressesOneCRPerHealthySweep(t *testing.T) {
 	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
 	c := newFakeClient(t, first, second)
-	r := fullAdopter(c, testConfig(), false)
+	r := adoptionReconciler(c, true, false)
 
 	r.adoptFleet(context.Background())
+	if marker := get(t, c, first.Namespace, first.Name).Annotations[kubernetes.AnnotationAdoption]; marker != adoptionPendingMarker {
+		t.Fatalf("first marker = %q, want pending", marker)
+	}
 	r.adoptFleet(context.Background())
-	if live := get(t, c, second.Namespace, second.Name); kubernetes.IsManagedByBifrost(live) {
-		t.Fatal("adopted a second instance before the first reported current-generation health")
+	if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("adopted second CR while the first was pending")
 	}
 
 	makeCurrentGenerationHealthy(t, c, get(t, c, first.Namespace, first.Name))
-	r.adoptFleet(context.Background()) // marks the checkpoint verified
-	if live := get(t, c, second.Namespace, second.Name); kubernetes.IsManagedByBifrost(live) {
-		t.Fatal("adopted a second instance in the verification sweep")
+	r.adoptFleet(context.Background())
+	if _, present := get(t, c, first.Namespace, first.Name).Annotations[kubernetes.AnnotationAdoption]; present {
+		t.Fatal("did not remove the healthy pending marker")
 	}
-	r.adoptFleet(context.Background()) // may now choose the next deterministic candidate
-	if live := get(t, c, second.Namespace, second.Name); !kubernetes.IsManagedByBifrost(live) {
-		t.Fatal("did not admit the next instance after durable verification")
+	if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("adopted second CR in the pending-marker cleanup sweep")
+	}
+
+	r.adoptFleet(context.Background())
+	if marker := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationAdoption]; marker != adoptionPendingMarker {
+		t.Fatalf("second marker = %q, want pending", marker)
 	}
 }
 
-func TestFullAdoption_RejectsStaleReadiness(t *testing.T) {
+func TestLegacyAdoptionRejectsStaleReadiness(t *testing.T) {
 	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
 	c := newFakeClient(t, first, second)
-	r := fullAdopter(c, testConfig(), false)
+	r := adoptionReconciler(c, true, false)
 	r.adoptFleet(context.Background())
 
 	live := get(t, c, first.Namespace, first.Name)
@@ -156,54 +247,64 @@ func TestFullAdoption_RejectsStaleReadiness(t *testing.T) {
 	if err := c.Update(context.Background(), live); err != nil {
 		t.Fatal(err)
 	}
-	r.adoptFleet(context.Background())
 
-	if kubernetes.IsManagedByBifrost(get(t, c, second.Namespace, second.Name)) {
-		t.Fatal("stale readiness admitted the next instance")
+	r.adoptFleet(context.Background())
+	if marker := get(t, c, first.Namespace, first.Name).Annotations[kubernetes.AnnotationAdoption]; marker != adoptionPendingMarker {
+		t.Fatalf("stale-ready marker = %q, want pending", marker)
+	}
+	if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("stale readiness admitted the next CR")
 	}
 }
 
-func TestFullAdoption_PendingCheckpointSurvivesRestart(t *testing.T) {
+func TestLegacyAdoptionPendingMarkerSurvivesRestart(t *testing.T) {
 	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
 	c := newFakeClient(t, first, second)
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
 
-	if kubernetes.IsManagedByBifrost(get(t, c, second.Namespace, second.Name)) {
-		t.Fatal("a new reconciler bypassed the persisted pending health gate")
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+
+	if marker := get(t, c, first.Namespace, first.Name).Annotations[kubernetes.AnnotationAdoption]; marker != adoptionPendingMarker {
+		t.Fatalf("pending marker = %q, want pending", marker)
+	}
+	if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("new reconciler bypassed pending health gate")
 	}
 }
 
-func TestFullAdoption_RecoversTargetWriteWhenCheckpointPhaseWasNotUpdated(t *testing.T) {
+func TestLegacyAdoptionAcceptsLatestCurrentGenerationWhilePending(t *testing.T) {
 	crd := legacyInstance(t, "team-a")
 	c := newFakeClient(t, crd)
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
 
-	configMap, checkpoint := getCheckpoint(t, c, crd.Namespace)
-	checkpoint.Phase = adoptionPrepared
-	raw, err := marshalAdoptionCheckpoint(checkpoint)
-	if err != nil {
+	updated := get(t, c, crd.Namespace, crd.Name)
+	updated.Spec.Size = 2
+	updated.Generation++
+	if err := c.Update(context.Background(), updated); err != nil {
 		t.Fatal(err)
 	}
-	configMap.Data[adoptionCheckpointKey] = raw
-	if err := c.Update(context.Background(), configMap); err != nil {
-		t.Fatal(err)
-	}
-	live := get(t, c, crd.Namespace, crd.Name)
-	live.Generation++
-	if err := c.Update(context.Background(), live); err != nil {
-		t.Fatal(err)
-	}
+	makeCurrentGenerationHealthy(t, c, get(t, c, crd.Namespace, crd.Name))
 
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
-
-	_, checkpoint = getCheckpoint(t, c, crd.Namespace)
-	if checkpoint.Phase != adoptionTargetWritten {
-		t.Fatalf("checkpoint phase = %q, want recovery to %q", checkpoint.Phase, adoptionTargetWritten)
+	adoptionReconciler(c, false, false).adoptFleet(context.Background())
+	if _, present := get(t, c, crd.Namespace, crd.Name).Annotations[kubernetes.AnnotationAdoption]; present {
+		t.Fatal("latest healthy generation did not clear the pending marker")
 	}
 }
 
-func TestFullAdoption_DryRunPlansButDoesNotWrite(t *testing.T) {
+func TestLegacyAdoptionCleansPendingMarkerAfterAutoAdoptIsDisabled(t *testing.T) {
+	crd := legacyInstance(t, "team-a")
+	c := newFakeClient(t, crd)
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+	makeCurrentGenerationHealthy(t, c, get(t, c, crd.Namespace, crd.Name))
+
+	adoptionReconciler(c, false, false).adoptFleet(context.Background())
+
+	if _, present := get(t, c, crd.Namespace, crd.Name).Annotations[kubernetes.AnnotationAdoption]; present {
+		t.Fatal("autoAdopt=false did not clean up a healthy pending marker")
+	}
+}
+
+func TestLegacyAdoptionDryRunRendersWithoutWriting(t *testing.T) {
 	crd := legacyInstance(t, "team-preview")
 	crd.Spec.Size = 4
 	c := newFakeClient(t, crd)
@@ -212,199 +313,153 @@ func TestFullAdoption_DryRunPlansButDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fullAdopter(c, testConfig(), true).adoptFleet(context.Background())
+	adoptionReconciler(c, true, true).adoptFleet(context.Background())
 
-	live := get(t, c, crd.Namespace, crd.Name)
-	after, err := json.Marshal(live)
+	after, err := json.Marshal(get(t, c, crd.Namespace, crd.Name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(after) != string(before) {
 		t.Fatal("dry-run changed the legacy CR")
 	}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: crd.Namespace, Name: adoptionCheckpointName}, &corev1.ConfigMap{}); err == nil {
-		t.Fatal("dry-run created a durable checkpoint")
-	}
 }
 
-func TestFullAdoption_RequiresExplicitCRApproval(t *testing.T) {
-	crd := legacyInstance(t, "team-unapproved")
-	delete(crd.Labels, kubernetes.LabelAdopt)
+func TestLegacyAdoptionSelectsPreviouslyLabelAdoptedCR(t *testing.T) {
+	crd := legacyInstance(t, "team-label-only")
 	c := newFakeClient(t, crd)
 
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
-
-	if kubernetes.IsManagedByBifrost(get(t, c, crd.Namespace, crd.Name)) {
-		t.Fatal("full adoption normalized a CR without explicit approval")
-	}
-}
-
-func TestFullAdoption_ReportsAListFailureAsBlocked(t *testing.T) {
-	crd := legacyInstance(t, "team-list-failure")
-	c := newFakeClientWith(t, interceptor.Funcs{
-		List: func(_ context.Context, _ client.WithWatch, _ client.ObjectList, _ ...client.ListOption) error {
-			return errors.New("Kubernetes API unavailable")
-		},
-	}, crd)
-	before := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": adoptionError})
-
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
-
-	if got := seriesValue(t, "bifrost_reconciler_adoption_checkpoint_state", map[string]string{"state": adoptionStateBlocked}); got != 1 {
-		t.Errorf("checkpoint state blocked = %v, want 1", got)
-	}
-	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": adoptionError}); got != before+1 {
-		t.Errorf("adoption errors = %v, want %v", got, before+1)
-	}
-}
-
-func TestFullAdoption_RefusesUnknownManualShapes(t *testing.T) {
-	crd := legacyInstance(t, "team-manual")
-	crd.Spec.PodLabels = map[string]string{"manual": "true"}
-	before, err := json.Marshal(crd.Spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := newFakeClient(t, crd)
-
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
 
 	live := get(t, c, crd.Namespace, crd.Name)
-	after, err := json.Marshal(live.Spec)
-	if err != nil {
-		t.Fatal(err)
+	if _, present, err := recordedIntent(live); err != nil || !present {
+		t.Fatalf("label-only CR desired state present=%t, err=%v", present, err)
 	}
-	if string(after) != string(before) || kubernetes.IsManagedByBifrost(live) {
-		t.Fatal("unsafe manual shape was changed instead of refused")
-	}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: crd.Namespace, Name: adoptionCheckpointName}, &corev1.ConfigMap{}); err == nil {
-		t.Fatal("a refused shape created a checkpoint")
+	if live.Annotations[kubernetes.AnnotationAdoption] != adoptionPendingMarker {
+		t.Fatal("label-only CR was not admitted for adoption")
 	}
 }
 
-func TestFullAdoption_SelectsCanonicalizableCandidateDeterministically(t *testing.T) {
-	last, first := legacyInstance(t, "team-z"), legacyInstance(t, "team-a")
-	c := newFakeClient(t, last, first)
-
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
-
-	_, checkpoint := getCheckpoint(t, c, first.Namespace)
-	if checkpoint.ResourceName != "team-a" {
-		t.Errorf("selected %q, want lexicographically first canonicalizable candidate", checkpoint.ResourceName)
-	}
-}
-
-func TestFullAdoption_CheckpointDeletionBlocksTheFleet(t *testing.T) {
-	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
-	c := newFakeClient(t, first, second)
-	r := fullAdopter(c, testConfig(), false)
-	r.adoptFleet(context.Background())
-
-	configMap, _ := getCheckpoint(t, c, first.Namespace)
-	if err := c.Delete(context.Background(), configMap); err != nil {
-		t.Fatal(err)
-	}
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
-
-	if kubernetes.IsManagedByBifrost(get(t, c, second.Namespace, second.Name)) {
-		t.Fatal("checkpoint deletion admitted another candidate")
-	}
-}
-
-func TestAdoptionCheckpoint_RecordRejectsReplacedConfigMapUID(t *testing.T) {
-	crd := legacyInstance(t, "team-a")
-	plan, err := planLegacyAdoption(crd, testConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkpoint := newAdoptionCheckpoint(plan, crd.Namespace, crd.Name, crd.UID, crd.Generation)
-	configMap, err := checkpointConfigMap(crd.Namespace, checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	configMap.UID = "replacement-uid"
-	record, err := kubernetes.NewAdoptionRecord(crd, configMap.Name, checkpoint.ID, "original-uid", plan.target.Spec, plan.targetIntent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := checkpointMatchesRecord(checkpoint, configMap, record); err == nil {
-		t.Fatal("replacement ConfigMap UID was accepted")
-	}
-}
-
-func TestFullAdoption_StaleCheckpointDataEntersDurableFailure(t *testing.T) {
-	crd := legacyInstance(t, "team-a")
+func TestLegacyAdoptionPreservesObservedV7ReleaseChannel(t *testing.T) {
+	crd := legacyInstance(t, "migration-test-v7")
+	crd.Spec.ReleaseChannel.Name = "unleash-v7"
 	c := newFakeClient(t, crd)
-	r := fullAdopter(c, testConfig(), false)
-	r.adoptFleet(context.Background())
 
-	configMap, checkpoint := getCheckpoint(t, c, crd.Namespace)
-	checkpoint.ID = "replacement-checkpoint"
-	raw, err := marshalAdoptionCheckpoint(checkpoint)
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+
+	live := get(t, c, crd.Namespace, crd.Name)
+	if live.Spec.ReleaseChannel.Name != "unleash-v7" {
+		t.Fatalf("release channel = %q, want unleash-v7", live.Spec.ReleaseChannel.Name)
+	}
+	intent, present, err := recordedIntent(live)
+	if err != nil || !present || intent.ReleaseChannelName != "unleash-v7" {
+		t.Fatalf("desired-state release channel = %#v, present=%t, err=%v", intent, present, err)
+	}
+}
+
+func TestLegacyAdoptionRefusesMalformedDesiredState(t *testing.T) {
+	crd := legacyInstance(t, "team-malformed")
+	crd.Annotations[kubernetes.AnnotationDesiredState] = `{"schemaVersion":99,"Name":"team-malformed"}`
+	c := newFakeClient(t, crd)
+	before, err := json.Marshal(get(t, c, crd.Namespace, crd.Name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	configMap.Data[adoptionCheckpointKey] = raw
-	if err := c.Update(context.Background(), configMap); err != nil {
+
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+
+	after, err := json.Marshal(get(t, c, crd.Namespace, crd.Name))
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	r.adoptFleet(context.Background())
-
-	_, checkpoint = getCheckpoint(t, c, crd.Namespace)
-	if checkpoint.Phase != adoptionFailed || checkpoint.Failure == "" {
-		t.Fatalf("checkpoint = %#v, want durable manual recovery state", checkpoint)
+	if string(after) != string(before) {
+		t.Fatal("malformed desired state was overwritten")
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_remaining", nil); got != 1 {
+		t.Fatalf("adoption remaining = %v, want 1", got)
 	}
 }
 
-func TestFullAdoption_SourceDeletionBeforeVerificationEntersDurableFailure(t *testing.T) {
-	crd := legacyInstance(t, "team-a")
+func TestLegacyAdoptionDoesNotTouchForeignManagedCR(t *testing.T) {
+	crd := legacyInstance(t, "team-foreign")
+	delete(crd.Labels, kubernetes.LabelManagedBy)
+	crd.Annotations[kubernetes.AnnotationAdoption] = adoptionPendingMarker
 	c := newFakeClient(t, crd)
-	r := fullAdopter(c, testConfig(), false)
-	r.adoptFleet(context.Background())
-	if err := c.Delete(context.Background(), get(t, c, crd.Namespace, crd.Name)); err != nil {
-		t.Fatal(err)
+
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+
+	live := get(t, c, crd.Namespace, crd.Name)
+	if live.Annotations[kubernetes.AnnotationAdoption] != adoptionPendingMarker {
+		t.Fatal("foreign CR pending marker was changed")
 	}
-
-	r.adoptFleet(context.Background())
-
-	_, checkpoint := getCheckpoint(t, c, crd.Namespace)
-	if checkpoint.Phase != adoptionFailed {
-		t.Fatalf("checkpoint phase = %q, want %q", checkpoint.Phase, adoptionFailed)
+	if _, present := live.Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("foreign CR received Bifrost desired state")
 	}
 }
 
-func TestFullAdoption_BlocksWhenPendingTargetChanges(t *testing.T) {
-	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
-	c := newFakeClient(t, first, second)
-	r := fullAdopter(c, testConfig(), false)
-	r.adoptFleet(context.Background())
-
-	live := get(t, c, first.Namespace, first.Name)
-	live.Annotations[kubernetes.AnnotationDesiredState] = `{"tampered":true}`
-	makeCurrentGenerationHealthy(t, c, live)
-	r.adoptFleet(context.Background())
-
-	if kubernetes.IsManagedByBifrost(get(t, c, second.Namespace, second.Name)) {
-		t.Fatal("changed pending target admitted the next candidate")
-	}
-	_, checkpoint := getCheckpoint(t, c, first.Namespace)
-	if checkpoint.Phase != adoptionFailed {
-		t.Fatalf("checkpoint phase = %q, want durable failure", checkpoint.Phase)
-	}
-}
-
-func TestFullAdoption_YieldsForChannelMigrationTransaction(t *testing.T) {
+func TestLegacyAdoptionYieldsForChannelMigrationTransaction(t *testing.T) {
 	crd := legacyInstance(t, "team-a")
 	crd.Annotations[kubernetes.AnnotationChannelMigration] = `{"phase":"target-written"}`
 	c := newFakeClient(t, crd)
 
-	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
 
-	if kubernetes.IsManagedByBifrost(get(t, c, crd.Namespace, crd.Name)) {
-		t.Fatal("legacy adoption changed a CR while a channel migration transaction was active")
+	live := get(t, c, crd.Namespace, crd.Name)
+	if _, present := live.Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("legacy adoption changed a CR with a channel-migration transaction")
 	}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: crd.Namespace, Name: adoptionCheckpointName}, &corev1.ConfigMap{}); err == nil {
-		t.Fatal("legacy adoption created a checkpoint while a channel migration transaction was active")
+	if live.Annotations[kubernetes.AnnotationAdoption] != "" {
+		t.Fatal("legacy adoption set a pending marker while channel migration was active")
+	}
+}
+
+func TestLegacyAdoptionWaitsForPendingDeletion(t *testing.T) {
+	crd := legacyInstance(t, "team-a")
+	crd.Finalizers = []string{"unleash.nais.io/finalizer"}
+	c := newFakeClient(t, crd)
+	adoptionReconciler(c, true, false).adoptFleet(context.Background())
+
+	live := get(t, c, crd.Namespace, crd.Name)
+	if err := c.Delete(context.Background(), live); err != nil {
+		t.Fatal(err)
+	}
+
+	adoptionReconciler(c, false, false).adoptFleet(context.Background())
+	if marker := get(t, c, crd.Namespace, crd.Name).Annotations[kubernetes.AnnotationAdoption]; marker != adoptionPendingMarker {
+		t.Fatalf("deleting CR marker = %q, want pending", marker)
+	}
+}
+
+func TestLegacyAdoptionStopsForUnsafeMarkers(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*unleashv1.Unleash, *unleashv1.Unleash)
+	}{
+		{
+			name: "multiple pending",
+			setup: func(first, second *unleashv1.Unleash) {
+				first.Annotations[kubernetes.AnnotationAdoption] = adoptionPendingMarker
+				second.Annotations[kubernetes.AnnotationAdoption] = adoptionPendingMarker
+			},
+		},
+		{
+			name: "unknown marker",
+			setup: func(first, _ *unleashv1.Unleash) {
+				first.Annotations[kubernetes.AnnotationAdoption] = "unexpected"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
+			test.setup(first, second)
+			c := newFakeClient(t, first, second)
+
+			adoptionReconciler(c, true, false).adoptFleet(context.Background())
+
+			if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
+				t.Fatal("unsafe marker admitted a new CR")
+			}
+		})
 	}
 }

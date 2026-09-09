@@ -9,17 +9,6 @@ rules:
   - apiGroups:
       - ""
     resources:
-      - configmaps
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-  - apiGroups:
-      - ""
-    resources:
       - secrets
     verbs:
       - list

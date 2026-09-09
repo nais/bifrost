@@ -31,8 +31,8 @@ import (
 const defaultResyncInterval = 10 * time.Minute
 
 // UnleashReconciler converges bifrost-managed Unleash CRs to their desired spec.
-// Legacy adoption uses a namespaced ConfigMap transaction instead of in-memory
-// state, so a restart cannot skip its current-generation health gate.
+// Legacy adoption uses a CR-local pending marker, so a restart cannot skip its
+// current-generation health gate.
 type UnleashReconciler struct {
 	client client.Client
 	config *config.Config
@@ -154,38 +154,42 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // desired-state annotation and falling back to reverse-engineering the spec for
 // instances created before the annotation existed.
 func (r *UnleashReconciler) resolveIntent(crd *unleashv1.Unleash) (*unleash.Config, error) {
-	if raw := crd.GetAnnotations()[kubernetes.AnnotationDesiredState]; raw != "" {
-		cfg, err := kubernetes.UnmarshalIntent(raw)
-		if err != nil {
-			return nil, err
-		}
-
-		// The annotation is authoritative, so whatever it says gets rendered
-		// onto a live instance. Malformed JSON already fails above, but valid
-		// JSON with wrong contents did not: "{}" unmarshals to an all-zero
-		// config and would render empty ingress hosts and a zero database pool.
-		// Hold it to the same rules the builder enforces.
-		if err := cfg.Validate(); err != nil {
-			return nil, fmt.Errorf("desired-state annotation is not a valid config: %w", err)
-		}
-
-		// And confirm it belongs to this instance. A copied or mis-templated
-		// annotation would otherwise converge one instance onto another's
-		// configuration, including its ingress hosts and database secret.
-		if cfg.Name != crd.GetName() {
-			return nil, fmt.Errorf("desired-state annotation names %q but is on instance %q", cfg.Name, crd.GetName())
-		}
-
+	cfg, present, err := recordedIntent(crd)
+	if err != nil {
+		return nil, err
+	}
+	if present {
 		return cfg, nil
 	}
 	return kubernetes.LoadConfigFromCRD(crd).Build()
 }
 
-// hasRecordedIntent reports whether the instance carries an intent bifrost
-// wrote, as opposed to one reverse-engineered from its spec. Only the former may
-// be converged onto a live instance.
+// recordedIntent returns a desired-state annotation only if this build can
+// read its schema and it is valid for the CR that carries it.
+func recordedIntent(crd *unleashv1.Unleash) (*unleash.Config, bool, error) {
+	raw := crd.GetAnnotations()[kubernetes.AnnotationDesiredState]
+	if raw == "" {
+		return nil, false, nil
+	}
+	cfg, err := kubernetes.UnmarshalIntent(raw)
+	if err != nil {
+		return nil, true, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, true, fmt.Errorf("desired-state annotation is not a valid config: %w", err)
+	}
+	if cfg.Name != crd.GetName() {
+		return nil, true, fmt.Errorf("desired-state annotation names %q but is on instance %q", cfg.Name, crd.GetName())
+	}
+	return cfg, true, nil
+}
+
+// hasRecordedIntent reports whether the instance carries a valid intent, as
+// opposed to one reverse-engineered from its spec. Only the former may be
+// converged onto a live instance.
 func hasRecordedIntent(crd *unleashv1.Unleash) bool {
-	return crd.GetAnnotations()[kubernetes.AnnotationDesiredState] != ""
+	_, present, err := recordedIntent(crd)
+	return present && err == nil
 }
 
 // syncState is the outcome of comparing a live instance to its render: whether
@@ -284,28 +288,16 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// runFleetSweep plans explicitly opted-in legacy adoption and keeps the fleet
-// gauges current until the manager stops. Added as a plain Runnable, so with
-// leader election on only the leader sweeps, matching the action counters.
-//
-// Adoption and the census share one runnable, in that order, so every census
-// reports the fleet as the sweep just left it. That ordering is what makes
-// unmanaged_instances readable during a migration: once adoption has run,
-// whatever is still unmanaged is opted out or failed to stamp — not merely
-// not-yet-visited — and the step in the gauges lines up with the adoptions
-// counted in the same pass. On separate timers a census could land mid-sweep
-// and publish, and timestamp, a split that says neither.
-//
-// The per-instance side needs no such ordering: an adoption target write queues
-// that CR through the watch, while its durable checkpoint blocks later writes.
+// runFleetSweep cleans up any pending legacy adoption and keeps the fleet
+// gauges current until the manager stops. New adoption writes remain gated by
+// AutoAdopt, but cleanup cannot be gated or a pending marker would persist
+// after the flag was turned off.
 func (r *UnleashReconciler) runFleetSweep(ctx context.Context) error {
 	ticker := time.NewTicker(r.resync)
 	defer ticker.Stop()
 
 	for {
-		if r.config.Reconciler.AutoAdopt {
-			r.adoptFleet(ctx)
-		}
+		r.adoptFleet(ctx)
 		r.countInstances(ctx)
 		select {
 		case <-ctx.Done():

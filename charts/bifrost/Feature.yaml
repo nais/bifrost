@@ -65,7 +65,7 @@ values:
       type: bool
   backend.reconciler.dryRun:
     displayName: Reconciler dry-run (observe only, no writes)
-    description: Off by default after fleet observation. With automatic adoption enabled, true runs compatibility planning for the next legacy candidate without changing its CR or ConfigMap checkpoint.
+    description: Off by default after fleet observation. With automatic adoption enabled, true renders the next legacy candidate without changing its CR.
     computed:
       template: 'false'
     config:
@@ -73,14 +73,11 @@ values:
   backend.reconciler.autoAdopt:
     displayName: Progressively adopt legacy Unleash instances in bifrost's namespace
     description: >-
-      Off by default. Re-enable only for an approved legacy-adoption rollout.
-      Set bifrost.nais.io/adopt=true on each approved CR. Bifrost refuses unknown
-      manual CR shapes, then canonicalizes one compatible legacy instance at a time.
-      It persists a UID-bound source snapshot and target hashes in the
-      bifrost-legacy-adoption ConfigMap, and waits for current-generation
-      reconciliation and connectivity before the next. A stale, deleted or failed
-      checkpoint stops adoption for manual recovery. Do not enable with
-      custom-version or channel migration admission.
+      Off by default. Bifrost canonicalizes one managed legacy CR without valid
+      desired state at a time and marks it pending. It waits for current-generation
+      reconciliation and connectivity before admitting another CR. Unknown or
+      multiple adoption markers stop adoption. Do not enable with custom-version
+      or channel migration admission.
     computed:
       template: 'false'
     config:

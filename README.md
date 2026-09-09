@@ -189,13 +189,13 @@ action.
 ### Legacy adoption
 
 `BIFROST_RECONCILER_AUTO_ADOPT=true` is disabled by default. It only considers
-legacy CRs with `bifrost.nais.io/adopt=true`, makes a read-only compatibility
-plan first, and refuses unknown manual fields. Each accepted CR is protected by
-the namespaced `bifrost-legacy-adoption` ConfigMap, which stores its UID-bound
-source snapshot and canonical target hashes. Bifrost waits for
-current-generation reconciliation and connectivity before the next CR. A
-missing, stale, replaced, or failed checkpoint stops adoption for manual
-recovery. Dry-run performs planning without writing a CR or ConfigMap.
+Bifrost-managed legacy CRs that lack valid `bifrost.nais.io/desired-state`.
+It canonicalizes one CR at a time, writes
+`bifrost.nais.io/adoption=pending`, then waits for current-generation
+reconciliation and connectivity before admitting another. Unknown or multiple
+markers stop adoption. Dry-run renders the deterministic next candidate
+without writes. Pending-marker cleanup continues when auto-admission is
+disabled.
 
 ## Development
 

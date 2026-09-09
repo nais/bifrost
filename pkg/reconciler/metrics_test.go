@@ -101,13 +101,20 @@ func TestReconcilerActions_ExposeTheDocumentedLabelValues(t *testing.T) {
 	}
 }
 
-func TestAdoptionCheckpointState_ExportsOneBoundedState(t *testing.T) {
-	setAdoptionCheckpointState(adoptionStateFailed)
-	if got := seriesValue(t, "bifrost_reconciler_adoption_checkpoint_state", map[string]string{"state": "failed"}); got != 1 {
-		t.Errorf(`checkpoint state "failed" = %v, want 1`, got)
+func TestAdoptionMetrics_ExposeBoundedState(t *testing.T) {
+	adoptionRemaining.Set(3)
+	adoptionPending.Set(1)
+	before := seriesValue(t, "bifrost_reconciler_adoption_events_total", map[string]string{"result": "blocked_unknown_marker"})
+	recordAdoptionEvent(adoptionEventBlockedUnknownMarker)
+
+	if got := seriesValue(t, "bifrost_reconciler_adoption_remaining", nil); got != 3 {
+		t.Errorf("adoption remaining = %v, want 3", got)
 	}
-	if got := seriesValue(t, "bifrost_reconciler_adoption_checkpoint_state", map[string]string{"state": "pending"}); got != 0 {
-		t.Errorf(`checkpoint state "pending" = %v, want 0`, got)
+	if got := seriesValue(t, "bifrost_reconciler_adoption_pending", nil); got != 1 {
+		t.Errorf("adoption pending = %v, want 1", got)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_events_total", map[string]string{"result": "blocked_unknown_marker"}); got != before+1 {
+		t.Errorf("blocked unknown marker events = %v, want %v", got, before+1)
 	}
 }
 

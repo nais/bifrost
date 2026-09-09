@@ -12,6 +12,7 @@ const (
 	channelEventSkippedUnmanaged   = "skipped_unmanaged"
 	channelEventSkippedNoIntent    = "skipped_invalid_intent"
 	channelEventSkippedUnhealthy   = "skipped_unhealthy"
+	channelEventSkippedAdoption    = "skipped_pending_adoption"
 	channelEventCanaryLimited      = "canary_limited"
 	channelEventOwnershipChanged   = "ownership_changed"
 	channelEventInvalidTransaction = "invalid_transaction"

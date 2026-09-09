@@ -178,11 +178,9 @@ type ReconcilerConfig struct {
 	// would change but never writes. This is the dark-launch step — enable the
 	// reconciler with DryRun on, confirm the blast radius, then set it false.
 	DryRun bool `env:"BIFROST_RECONCILER_DRY_RUN,default=false"`
-	// AutoAdopt enables progressive full adoption of explicitly opted-in legacy
-	// Unleash instances. A pure compatibility plan refuses unknown manual
-	// shapes. A ConfigMap checkpoint records source and target hashes before one
-	// canonical write, then blocks the next candidate until current-generation
-	// health is verified. DryRun plans but never writes.
+	// AutoAdopt admits one Bifrost-managed legacy CR missing desired state per
+	// sweep. The CR-local pending marker blocks the next admission until
+	// current-generation health is verified. DryRun plans but never writes.
 	AutoAdopt bool `env:"BIFROST_RECONCILER_AUTO_ADOPT,default=false"`
 	// ResyncInterval is how often every managed instance is re-rendered even
 	// without a CR event, so global-config changes propagate and drift heals.

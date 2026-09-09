@@ -151,11 +151,14 @@ loop, not for the API path.
 
 `resolveIntent` falls back to reverse-engineering the live spec with `LoadConfigFromCRD`
 (`pkg/reconciler/unleash.go:161-162`; #588 cites `:149`, which is now the validation call — the line
-moved, the behaviour did not). The instance stays managed, and the config it converges to is derived
-from the spec rather than from the recorded intent — which is *lossier*, not safer.
+moved, the behaviour did not). The instance stays managed. The per-instance
+reconciler observes it without writing because it has no recorded intent. With
+`autoAdopt=true`, it becomes a legacy-adoption candidate and Bifrost writes
+the canonical spec and desired state.
 
-An operator who deletes "bifrost's annotation" to make a manual hotfix stick gets the worst of both:
-still managed, and now converging on a reverse-engineered config.
+An operator who deletes the annotation to make a manual hotfix stick has not
+opted out. Remove the managed-by label to opt out of both reconciliation and
+legacy adoption.
 
 ### Repairing an instance durably
 
@@ -184,9 +187,9 @@ minute by the ServiceMonitor (`charts/bifrost/templates/backend-servicemonitor.y
 | `bifrost_reconciler_unmanaged_instances` | instances in the namespace without it |
 | `bifrost_reconciler_instances_updated_timestamp_seconds` | unix time of the last **successful** census |
 | `bifrost_reconciler_actions_total{action,reason}` | one increment per instance per reconcile |
-| `bifrost_reconciler_adoptions_total{result}` | legacy adoption outcomes: `adopted`, `verified`, `previewed`, `refused`, or `error` |
-| `bifrost_reconciler_adoption_checkpoint_state{state}` | single-flight checkpoint state: `pending`, `verified`, `failed`, `blocked`, `preview`, `idle`, or `waiting_channel_migration` |
-| `bifrost_reconciler_adoption_pending_verification` | 1 while a canonicalized CR must report current-generation health |
+| `bifrost_reconciler_adoption_remaining` | managed CRs without valid desired-state intent |
+| `bifrost_reconciler_adoption_pending` | CRs with the `bifrost.nais.io/adoption=pending` marker |
+| `bifrost_reconciler_adoption_events_total{result}` | bounded admission, wait, refusal, and safety-stop events |
 
 ### The trap: 0 does not mean "empty fleet"
 
@@ -328,7 +331,7 @@ a render that can never equal the stored object — the `omitempty`-on-bool case
 
 ## 7. Alerts
 
-`charts/bifrost/templates/prometheus-alerts.yaml` ships four reconciler rules in the
+`charts/bifrost/templates/prometheus-alerts.yaml` ships reconciler alert rules in the
 `bifrost_reconciler_alerts` group. They exist because this is a fleet-wide, multi-tenant service and
 nobody watches a dashboard continuously — an alert is the only mechanism that reaches a tenant where
 the loop silently never started.
@@ -337,13 +340,7 @@ the loop silently never started.
 |---|---|---|
 | `BifrostReconcilerCensusStalled` | no successful census for 30 min | Every other reconciler gauge is derived from the census, so a stale census makes all of them lie quietly. |
 | `BifrostReconcilerErrors` | `action=~"error\|intent_error"` rate > 0 for 15 min | `intent_error` in particular: an instance whose annotation cannot be read drops out of the managed set while every other metric still reads healthy. |
-| `BifrostAdoptionFailing` | adoption errors for 30 min | The source snapshot, target hashes, or checkpoint persistence failed. |
-| `BifrostAdoptionCheckpointBlocked` | checkpoint state `failed` or `blocked` for 5 min | The fleet has stopped until a human restores the checkpoint or recovers the CR; see §8. |
-
-`BifrostAdoptionCheckpointBlocked` is not wrapped in the `reconciler.enabled` conditional. The
-checkpoint-state series is absent until the adoption worker publishes a state, including where the
-loop is off. The alert remains inert for an absent series and still covers a tenant that enables the
-reconciler out of band.
+| `BifrostAdoptionPendingVerification` | one or more pending markers for 30 min | A canonicalized CR has not reported current-generation health. |
 
 ### Why the census rule is gated in Helm rather than in PromQL
 
@@ -375,77 +372,28 @@ baseline.
 ## 8. Safe legacy adoption
 
 `autoAdopt` (`BIFROST_RECONCILER_AUTO_ADOPT`) is an explicit, single-flight
-canonicalization of legacy `Unleash` CRs. It never adopts a CR unless it has
-`bifrost.nais.io/adopt=true`. Candidates are sorted by name and UID, so the
-same compatible candidate is chosen on every restart.
+canonicalization of Bifrost-managed legacy `Unleash` CRs. A candidate is any
+managed CR missing a valid `bifrost.nais.io/desired-state` annotation. Bifrost
+refuses malformed desired state and never touches CRs without its managed-by
+label. Candidates are sorted by name.
 
-### Compatibility plan
+Bifrost writes the canonical spec, managed-by label, desired-state annotation,
+and `bifrost.nais.io/adoption=pending` in one optimistic-lock patch. The
+marker remains while the CR is deleting or until Unleasherator reports
+`Reconciled=True` and `Connected=True` for the current generation. A healthy
+marker is removed in one sweep. The following sweep may admit the next CR.
 
-Before any write, Bifrost makes a pure plan from the source CR. The plan is
-also run in dry-run, but dry-run writes neither CR metadata nor the
-checkpoint ConfigMap. The supported contract may normalize version source,
-size, Prometheus settings, ingress host/class, federation, Bifrost's seven
-literal environment variables, and its `sql-proxy` sidecar.
+Pending-marker cleanup runs even after `autoAdopt` is disabled. Auto-admission
+stays disabled in that case. Multiple pending markers or any unknown marker
+stop adoption without changing a CR. Adoption yields while any
+`bifrost.nais.io/channel-migration` marker exists. Channel migration admission
+also skips CRs with an adoption marker.
 
-The following are safety boundaries. They must already be canonical or the
-plan refuses the CR with a field-specific log message:
-
-- database identity, network policy, service account, and resources
-- extra volumes, volume mounts, containers other than `sql-proxy`, and pod metadata
-- environment variables outside Bifrost's known set, duplicates, or `valueFrom`
-- ingress TLS or annotations, missing federation nonce, ambiguous version source
-
-A refusal leaves the CR unchanged and Bifrost tries later compatible
-candidates. Remove the manual field before explicitly opting in, or leave the
-CR unmanaged. Do not remove fields merely to bypass a refusal without
-checking their operational effect.
-
-### Checkpoint and health gate
-
-Before writing the canonical CR, Bifrost stores a `prepared` transaction in
-the namespaced `bifrost-legacy-adoption` ConfigMap. It includes the source CR
-UID, generation, complete source-spec snapshot and hash, target-spec hash,
-target-intent hash, and a checkpoint ID. The CR carries only a small pointer
-and matching hashes in `bifrost.nais.io/adoption`.
-
-After the CR target write, the checkpoint moves to `target-written`. Bifrost
-verifies the source UID, CR deletion state, checkpoint binding, canonical spec
-hash, and desired-state hash before it records `verified`. It also requires
-`Reconciled=True` and `Connected=True` with `observedGeneration` equal to the
-current CR generation. Only the following sweep can plan the next candidate.
-
-`prepared` recovery is safe after a crash. Bifrost either proves that the
-source and fresh pure plan still equal the stored hashes, or proves that the
-target and marker already match. It never recomputes a changed source into a
-new target under the old checkpoint.
-
-### Fail-closed recovery
-
-Do not delete or replace `bifrost-legacy-adoption`. A missing ConfigMap beside
-an adoption marker, a stale/replaced ConfigMap, a changed target, or source
-deletion before verification moves the checkpoint to
-`manual-recovery-required` where possible and stops the fleet. If the
-ConfigMap itself is unreadable or missing, Bifrost stops without creating a
-replacement.
-
-Inspect the CR, its `bifrost.nais.io/adoption` marker and the ConfigMap
-without logging source snapshot contents. Restore a known-good checkpoint or
-disable `autoAdopt` and recover the CR manually. Do not remove the marker to
-admit another candidate.
-
-Adoption also yields while any `bifrost.nais.io/channel-migration` marker is
-present. Resolve that transaction first.
-
-### Monitoring
+Dry-run renders and logs the first deterministic candidate's changed
+top-level spec sections without logging values or writing the CR. Monitor:
 
 ```promql
-sum(bifrost_reconciler_adoptions_total{result="adopted"})
-sum(increase(bifrost_reconciler_adoptions_total{result="refused"}[1h]))
-bifrost_reconciler_adoption_checkpoint_state
-bifrost_reconciler_adoption_pending_verification
+bifrost_reconciler_adoption_remaining
+bifrost_reconciler_adoption_pending
+sum by (result) (increase(bifrost_reconciler_adoption_events_total[1h]))
 ```
-
-`adoption_checkpoint_state{state="pending"}` means the fleet is waiting for
-current-generation health. `failed` or `blocked` requires manual recovery and
-fires `BifrostAdoptionCheckpointBlocked`. `waiting_channel_migration` is an
-intentional yield, not permission to remove a migration marker.
