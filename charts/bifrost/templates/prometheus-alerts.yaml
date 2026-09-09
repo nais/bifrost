@@ -156,6 +156,17 @@ spec:
           consequence: "Progressive adoption cannot start another instance until the pending CR reports Reconciled=True and Connected=True for its current generation."
           action: "Inspect the pending Unleash CR conditions and workload. Do not enable channel migration admission until its adoption marker is cleared."
 
+      - alert: BifrostAdoptionFailing
+        expr: sum(rate(bifrost_reconciler_adoption_events_total{result=~"error|refused_invalid_intent|blocked_unknown_marker|blocked_multiple_pending"}[15m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost cannot progress legacy Unleash adoption"
+          consequence: "Legacy CRs remain without authoritative desired state and cannot become eligible for channel migration."
+          action: "Inspect adoption event results and Bifrost logs. Correct invalid desired state or adoption markers before retrying."
+
     - name: bifrost_auth_alerts
       rules:
       # Before enforcement a rejected request was impossible; an unauthenticated

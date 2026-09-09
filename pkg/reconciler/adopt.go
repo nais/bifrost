@@ -34,6 +34,13 @@ func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 	})
 
 	adoptionRemaining.Set(float64(adoptionRemainingCount(list)))
+	pending, err := pendingAdoptions(list)
+	adoptionPending.Set(float64(len(pending)))
+	if err != nil {
+		recordAdoptionEvent(adoptionEventBlockedUnknownMarker)
+		r.logger.WithError(err).Error("Refusing legacy adoption because an adoption marker is invalid")
+		return
+	}
 
 	for i := range list.Items {
 		if list.Items[i].Annotations[kubernetes.AnnotationChannelMigration] != "" {
@@ -42,14 +49,6 @@ func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 				Info("Yielding legacy adoption while a channel-migration transaction exists")
 			return
 		}
-	}
-
-	pending, err := pendingAdoptions(list)
-	adoptionPending.Set(float64(len(pending)))
-	if err != nil {
-		recordAdoptionEvent(adoptionEventBlockedUnknownMarker)
-		r.logger.WithError(err).Error("Refusing legacy adoption because an adoption marker is invalid")
-		return
 	}
 
 	if len(pending) > 1 {

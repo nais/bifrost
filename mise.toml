@@ -35,8 +35,8 @@ description = "Run go vet"
 run = "go vet ./..."
 
 [tasks.tidy]
-description = "Tidy go.mod"
-run = "go mod tidy"
+description = "Tidy and verify go.mod"
+run = ["go mod tidy", "go mod verify"]
 
 [tasks.tidy-check]
 description = "Check if go.mod is tidy"
