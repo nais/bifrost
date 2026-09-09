@@ -78,8 +78,10 @@ type intentEnvelope struct {
 	unleash.Config
 }
 
-const AdoptionSchemaVersion = 2
-const maxAnnotationBytes = 256 * 1024
+const (
+	AdoptionSchemaVersion = 2
+	maxAnnotationBytes    = 256 * 1024
+)
 
 type AdoptionPhase string
 
