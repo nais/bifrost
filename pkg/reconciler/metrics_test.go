@@ -101,6 +101,16 @@ func TestReconcilerActions_ExposeTheDocumentedLabelValues(t *testing.T) {
 	}
 }
 
+func TestAdoptionCheckpointState_ExportsOneBoundedState(t *testing.T) {
+	setAdoptionCheckpointState(adoptionStateFailed)
+	if got := seriesValue(t, "bifrost_reconciler_adoption_checkpoint_state", map[string]string{"state": "failed"}); got != 1 {
+		t.Errorf(`checkpoint state "failed" = %v, want 1`, got)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_checkpoint_state", map[string]string{"state": "pending"}); got != 0 {
+		t.Errorf(`checkpoint state "pending" = %v, want 0`, got)
+	}
+}
+
 // The census has to see the whole namespace, not just the instances that still
 // carry the label — an instance that loses it must show up as unmanaged rather
 // than simply vanish.

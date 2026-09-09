@@ -186,6 +186,17 @@ explicitly declares the database downgrade safe. Target write failures and
 timeouts otherwise persist the `manual-recovery-required` phase for operator
 action.
 
+### Legacy adoption
+
+`BIFROST_RECONCILER_AUTO_ADOPT=true` is disabled by default. It only considers
+legacy CRs with `bifrost.nais.io/adopt=true`, makes a read-only compatibility
+plan first, and refuses unknown manual fields. Each accepted CR is protected by
+the namespaced `bifrost-legacy-adoption` ConfigMap, which stores its UID-bound
+source snapshot and canonical target hashes. Bifrost waits for
+current-generation reconciliation and connectivity before the next CR. A
+missing, stale, replaced, or failed checkpoint stops adoption for manual
+recovery. Dry-run performs planning without writing a CR or ConfigMap.
+
 ## Development
 
 ### Prerequisites

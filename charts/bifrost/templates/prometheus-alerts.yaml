@@ -145,25 +145,16 @@ spec:
           consequence: "A managed instance may no longer receive desired-state convergence."
           action: "Check controller-runtime logs and reconcile action metrics by reason."
 
-      # Adoption paces itself at one instance per resync and stops entirely if
-      # the instance it stamped last goes bad, so this is the state that needs a
-      # human: nothing more will be adopted until somebody looks and restarts.
-      #
-      # Deliberately not wrapped in the reconciler.enabled conditional the census
-      # rule needs. The gauge is registered at process start and reads 0
-      # everywhere, including in a bifrost with no reconciler at all, so `> 0`
-      # cannot fire where the loop is off — and leaving the rule in place means a
-      # tenant that turns the reconciler on out of band is still covered.
-      - alert: BifrostAdoptionHalted
-        expr: bifrost_reconciler_adoption_halted > 0
-        for: 5m
+      - alert: BifrostAdoptionPendingVerification
+        expr: bifrost_reconciler_adoption_pending_verification > 0
+        for: 30m
         labels:
           severity: warning
           namespace: {{ .Release.Namespace }}
         annotations:
-          summary: "Bifrost has halted Unleash fleet adoption after an instance it adopted stopped being healthy"
-          consequence: "No further instances will be adopted — the migration is stopped, not merely slowed — and the halt does not clear itself. Whatever is still unmanaged stays invisible to the reconciler until someone acts."
-          action: "Find the instance in the bifrost-backend logs (error, 'regressed after bifrost adopted it') and check its Unleash CR status and workload before restarting bifrost or toggling autoAdopt, which are the only things that clear the halt. See docs/RECONCILER_RUNBOOK.md."
+          summary: "Bifrost is waiting for a fully adopted Unleash instance to become healthy"
+          consequence: "Progressive adoption cannot start another instance until the pending CR reports Reconciled=True and Connected=True for its current generation."
+          action: "Find the pending instance in bifrost-backend logs, inspect its Unleash CR conditions and workload, and do not enable migration admission until it is verified."
 
       # Adoption stamps one instance per sweep, so a sustained error rate means
       # instances are being left invisible to the reconciler rather than a
@@ -176,8 +167,19 @@ spec:
           namespace: {{ .Release.Namespace }}
         annotations:
           summary: "Bifrost keeps failing to adopt Unleash instances"
-          consequence: "Instances that cannot be stamped stay invisible to the reconciler and keep counting as unmanaged, so the fleet never converges and would_change under-reports."
-          action: "Check the bifrost-backend logs for the failing instance names. A persistent conflict suggests another writer; a permission error suggests RBAC."
+          consequence: "Bifrost has stopped the current UID-bound checkpoint or cannot persist its source snapshot and target hashes."
+          action: "Check bifrost-backend logs and the bifrost-legacy-adoption ConfigMap. Do not delete or replace the ConfigMap; restore its checkpoint or resolve the recorded manual-recovery state."
+
+      - alert: BifrostAdoptionCheckpointBlocked
+        expr: max(bifrost_reconciler_adoption_checkpoint_state{state=~"failed|blocked"}) > 0
+        for: 5m
+        labels:
+          severity: critical
+          namespace: {{ .Release.Namespace }}
+        annotations:
+          summary: "Bifrost legacy adoption checkpoint requires manual recovery"
+          consequence: "No further legacy CR will be canonicalized until the UID, source snapshot, target hashes and ConfigMap binding are safe again."
+          action: "Inspect bifrost-legacy-adoption and the named Unleash CR. Do not remove the CR marker or checkpoint to bypass the gate; restore a known-good checkpoint or disable autoAdopt and recover manually."
 
     - name: bifrost_auth_alerts
       rules:

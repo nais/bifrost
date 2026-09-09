@@ -1,11 +1,15 @@
 package kubernetes
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -26,6 +30,7 @@ const (
 	// migration transaction. The migration state machine updates it separately
 	// with annotation-only optimistic-lock patches.
 	AnnotationChannelMigration = "bifrost.nais.io/channel-migration"
+	AnnotationAdoption         = "bifrost.nais.io/adoption"
 
 	// LabelAdopt opts an instance out of automatic adoption. It is a label
 	// rather than an annotation because the adopter's own List is label-scoped
@@ -71,6 +76,120 @@ const IntentSchemaVersion = 1
 type intentEnvelope struct {
 	SchemaVersion int `json:"schemaVersion"`
 	unleash.Config
+}
+
+const AdoptionSchemaVersion = 2
+const maxAnnotationBytes = 256 * 1024
+
+type AdoptionPhase string
+
+const (
+	AdoptionPending  AdoptionPhase = "pending"
+	AdoptionVerified AdoptionPhase = "verified"
+)
+
+// AdoptionRecord is the CR-side pointer to the durable adoption checkpoint.
+// The ConfigMap holds the source snapshot so the potentially large source spec
+// does not consume the CR annotation budget. SourceSpec is never logged.
+type AdoptionRecord struct {
+	SchemaVersion          int           `json:"schemaVersion"`
+	ResourceUID            types.UID     `json:"resourceUid"`
+	SourceGeneration       int64         `json:"sourceGeneration"`
+	CapturedAt             metav1.Time   `json:"capturedAt"`
+	Phase                  AdoptionPhase `json:"phase"`
+	CheckpointName         string        `json:"checkpointName"`
+	CheckpointID           string        `json:"checkpointId"`
+	CheckpointConfigMapUID types.UID     `json:"checkpointConfigMapUid,omitempty"`
+	SourceSpecSHA256       string        `json:"sourceSpecSha256"`
+	TargetSpecSHA256       string        `json:"targetSpecSha256"`
+	TargetIntentSHA256     string        `json:"targetIntentSha256"`
+}
+
+func NewAdoptionRecord(crd *unleashv1.Unleash, checkpointName, checkpointID string, checkpointConfigMapUID types.UID, targetSpec any, intent string) (AdoptionRecord, error) {
+	sourceHash, err := HashJSON(crd.Spec)
+	if err != nil {
+		return AdoptionRecord{}, fmt.Errorf("hash source spec: %w", err)
+	}
+	targetHash, err := HashJSON(targetSpec)
+	if err != nil {
+		return AdoptionRecord{}, fmt.Errorf("hash target spec: %w", err)
+	}
+	return AdoptionRecord{
+		SchemaVersion:          AdoptionSchemaVersion,
+		ResourceUID:            crd.UID,
+		SourceGeneration:       crd.Generation,
+		CapturedAt:             metav1.NewTime(time.Now().UTC()),
+		Phase:                  AdoptionPending,
+		CheckpointName:         checkpointName,
+		CheckpointID:           checkpointID,
+		CheckpointConfigMapUID: checkpointConfigMapUID,
+		SourceSpecSHA256:       sourceHash,
+		TargetSpecSHA256:       targetHash,
+		TargetIntentSHA256:     HashBytes([]byte(intent)),
+	}, nil
+}
+
+func MarshalAdoption(record AdoptionRecord) (string, error) {
+	b, err := json.Marshal(record)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func UnmarshalAdoption(value string) (AdoptionRecord, error) {
+	var record AdoptionRecord
+	if err := json.Unmarshal([]byte(value), &record); err != nil {
+		return record, err
+	}
+	if record.SchemaVersion != AdoptionSchemaVersion || record.ResourceUID == "" || record.SourceGeneration < 1 ||
+		(record.Phase != AdoptionPending && record.Phase != AdoptionVerified) || record.CheckpointName == "" ||
+		record.CheckpointID == "" || !isSHA256(record.SourceSpecSHA256) ||
+		!isSHA256(record.TargetSpecSHA256) || !isSHA256(record.TargetIntentSHA256) {
+		return record, fmt.Errorf("invalid adoption record")
+	}
+	return record, nil
+}
+
+func MatchesAdoptionTarget(record AdoptionRecord, crd *unleashv1.Unleash) bool {
+	specHash, err := HashJSON(crd.Spec)
+	if err != nil {
+		return false
+	}
+	return record.TargetSpecSHA256 == specHash &&
+		record.TargetIntentSHA256 == HashBytes([]byte(crd.Annotations[AnnotationDesiredState]))
+}
+
+func HashJSON(value any) (string, error) {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return HashBytes(bytes), nil
+}
+
+func HashBytes(value []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(value))
+}
+
+func isSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func AnnotationsFit(values map[string]string) bool {
+	size := 0
+	for key, value := range values {
+		size += len(key) + len(value)
+	}
+	return size <= maxAnnotationBytes
 }
 
 // MarshalIntent serializes a per-instance config, stamped with the current
