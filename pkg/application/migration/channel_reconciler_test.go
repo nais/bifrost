@@ -107,6 +107,22 @@ func TestChannelReconcilerAdmitsOnlyManagedValidIntentWithinCanaryCap(t *testing
 	assert.Equal(t, []string{"bravo", "charlie"}, repo.updateCalls)
 }
 
+func TestChannelReconcilerSkipsPendingLegacyAdoption(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("team-a", "", "stable-v6", true)
+	repo.SetReadyOnChannel("team-a", "stable-v7", "unleash/unleash-server:7.6.5")
+	repo.mu.Lock()
+	repo.crds["team-a"].Annotations[kubernetes.AnnotationAdoption] = "pending"
+	repo.mu.Unlock()
+
+	cfg := newChannelTestConfig(true, "stable-v6:stable-v7", time.Second)
+	newChannelTestReconciler(repo, channelTestChannels(), cfg).Start(context.Background())
+
+	assert.Equal(t, "stable-v6", mustInstance(t, repo, "team-a").ReleaseChannelName)
+	assert.Zero(t, repo.updateAttempts)
+	assert.Empty(t, repo.patchCalls)
+}
+
 func TestChannelReconcilerPersistsPinnedCompletedTransactionAndPreservesObjectState(t *testing.T) {
 	repo := NewMockUnleashRepository()
 	repo.AddInstance("team-a", "", "stable-v6", true)

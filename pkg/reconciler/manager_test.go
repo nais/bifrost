@@ -61,19 +61,18 @@ func TestInstanceNamespace_RejectsWhitespacePadding(t *testing.T) {
 // reconciler refuses to converge those, but the manager refuses the combination
 // outright: the safety of adoption must not rest on a single rule inside the
 // reconcile loop.
-func TestNewManager_RefusesAutoAdoptWithoutDryRun(t *testing.T) {
+func TestNewManager_RefusesAutoAdoptWithoutReconciler(t *testing.T) {
 	cfg := testConfig()
 	cfg.Reconciler.AutoAdopt = true
-	cfg.Reconciler.DryRun = false
 
 	logger := logrus.New()
 	logger.SetOutput(nopWriter{})
 
 	_, err := NewManager(cfg, logger)
 	if err == nil {
-		t.Fatal("NewManager returned a manager for autoAdopt with dry-run off; want an error")
+		t.Fatal("NewManager returned a manager for autoAdopt without an enabled reconciler; want an error")
 	}
-	for _, want := range []string{"BIFROST_RECONCILER_AUTO_ADOPT", "BIFROST_RECONCILER_DRY_RUN"} {
+	for _, want := range []string{"BIFROST_RECONCILER_AUTO_ADOPT", "BIFROST_RECONCILER_ENABLED"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("NewManager error = %q, want it to name %s", err, want)
 		}

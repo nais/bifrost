@@ -151,11 +151,14 @@ loop, not for the API path.
 
 `resolveIntent` falls back to reverse-engineering the live spec with `LoadConfigFromCRD`
 (`pkg/reconciler/unleash.go:161-162`; #588 cites `:149`, which is now the validation call — the line
-moved, the behaviour did not). The instance stays managed, and the config it converges to is derived
-from the spec rather than from the recorded intent — which is *lossier*, not safer.
+moved, the behaviour did not). The instance stays managed. The per-instance
+reconciler observes it without writing because it has no recorded intent. With
+`autoAdopt=true`, it becomes a legacy-adoption candidate and Bifrost writes
+the canonical spec and desired state.
 
-An operator who deletes "bifrost's annotation" to make a manual hotfix stick gets the worst of both:
-still managed, and now converging on a reverse-engineered config.
+An operator who deletes the annotation to make a manual hotfix stick has not
+opted out. Remove the managed-by label to opt out of both reconciliation and
+legacy adoption.
 
 ### Repairing an instance durably
 
@@ -184,8 +187,9 @@ minute by the ServiceMonitor (`charts/bifrost/templates/backend-servicemonitor.y
 | `bifrost_reconciler_unmanaged_instances` | instances in the namespace without it |
 | `bifrost_reconciler_instances_updated_timestamp_seconds` | unix time of the last **successful** census |
 | `bifrost_reconciler_actions_total{action,reason}` | one increment per instance per reconcile |
-| `bifrost_reconciler_adoptions_total{result}` | fleet adoption outcomes: `adopted` (one per instance, at most one per sweep), `unhealthy` (candidate deferred), `error` (stamp failed), `halted` (adoption stopped itself) — see §8 |
-| `bifrost_reconciler_adoption_halted` | 1 when adoption has stopped itself and is waiting for a human; 0 otherwise (§8) |
+| `bifrost_reconciler_adoption_remaining` | managed CRs without valid desired-state intent |
+| `bifrost_reconciler_adoption_pending` | CRs with the `bifrost.nais.io/adoption=pending` marker |
+| `bifrost_reconciler_adoption_events_total{result}` | bounded admission, wait, refusal, and safety-stop events |
 
 ### The trap: 0 does not mean "empty fleet"
 
@@ -327,7 +331,7 @@ a render that can never equal the stored object — the `omitempty`-on-bool case
 
 ## 7. Alerts
 
-`charts/bifrost/templates/prometheus-alerts.yaml` ships four reconciler rules in the
+`charts/bifrost/templates/prometheus-alerts.yaml` ships reconciler alert rules in the
 `bifrost_reconciler_alerts` group. They exist because this is a fleet-wide, multi-tenant service and
 nobody watches a dashboard continuously — an alert is the only mechanism that reaches a tenant where
 the loop silently never started.
@@ -336,13 +340,7 @@ the loop silently never started.
 |---|---|---|
 | `BifrostReconcilerCensusStalled` | no successful census for 30 min | Every other reconciler gauge is derived from the census, so a stale census makes all of them lie quietly. |
 | `BifrostReconcilerErrors` | `action=~"error\|intent_error"` rate > 0 for 15 min | `intent_error` in particular: an instance whose annotation cannot be read drops out of the managed set while every other metric still reads healthy. |
-| `BifrostAdoptionFailing` | adoption errors for 30 min | A sustained rate means instances are being left invisible rather than a transient conflict. |
-| `BifrostAdoptionHalted` | `bifrost_reconciler_adoption_halted > 0` for 5 min | The only self-inflicted stop in the whole loop, and the only one that never clears itself. Nothing else will be adopted until a human acts; see §8. |
-
-`BifrostAdoptionHalted` is **not** wrapped in the `reconciler.enabled` conditional the census rule
-needs. The gauge is registered at process start and reads `0` everywhere, including in a bifrost with
-no reconciler, so `> 0` cannot fire where the loop is off — the gate would buy nothing and would lose
-coverage for a tenant that enables the reconciler out of band.
+| `BifrostAdoptionPendingVerification` | one or more pending markers for 30 min | A canonicalized CR has not reported current-generation health. |
 
 ### Why the census rule is gated in Helm rather than in PromQL
 
@@ -371,98 +369,31 @@ baseline.
 
 ---
 
-## 8. Adoption, and why turning it on looks like nothing happening
+## 8. Safe legacy adoption
 
-`autoAdopt` (`BIFROST_RECONCILER_AUTO_ADOPT`) stamps `app.kubernetes.io/managed-by=bifrost` on
-unlabelled `Unleash` CRs in the instance namespace, which is the only thing that makes them visible
-to the loop — both the watch predicate and the in-loop check are gated on that label (§3). It runs
-inside the fleet sweep, before the census (`pkg/reconciler/unleash.go`, `runFleetSweep`), so every
-census reports the fleet as the sweep just left it.
+`autoAdopt` (`BIFROST_RECONCILER_AUTO_ADOPT`) is an explicit, single-flight
+canonicalization of Bifrost-managed legacy `Unleash` CRs. A candidate is any
+managed CR missing a valid `bifrost.nais.io/desired-state` annotation. Bifrost
+refuses malformed desired state and never touches CRs without its managed-by
+label. Candidates are sorted by name.
 
-**It adopts at most one instance per sweep.** That is the expected behaviour, not a stall.
+Bifrost writes the canonical spec, managed-by label, desired-state annotation,
+and `bifrost.nais.io/adoption=pending` in one optimistic-lock patch. The
+marker remains while the CR is deleting or until Unleasherator reports
+`Reconciled=True` and `Connected=True` for the current generation. A healthy
+marker is removed in one sweep. The following sweep may admit the next CR.
 
-### Why it is paced
+Pending-marker cleanup runs even after `autoAdopt` is disabled. Auto-admission
+stays disabled in that case. Multiple pending markers or any unknown marker
+stop adoption without changing a CR. Adoption yields while any
+`bifrost.nais.io/channel-migration` marker exists. Channel migration admission
+also skips CRs with an adoption marker.
 
-The label is not inert outside bifrost. Unleasherator filters its own watch on
-`predicate.Or(GenerationChangedPredicate{}, LabelChangedPredicate{})` and runs with
-`MaxConcurrentReconciles: 4` (`nais/unleasherator`, `internal/controller/unleash_controller.go`,
-`SetupWithManager`) — so **a label change wakes a full reconcile there**. Most are no-ops, but any
-instance whose workload has drifted from what unleasherator renders is converged right then, and
-each reconcile ends in a live connectivity check against the Unleash instance. Stamping the ~63
-unlabelled production instances in one pass would turn a metadata migration into a fleet-wide burst
-of deferred convergence.
-
-The sweep ticker *is* the pacing: one stamp, then return, next candidate on the next tick. Nothing
-sleeps — a runnable that sleeps holds its slot and ignores cancellation.
-
-| Fleet | `resyncInterval` | Time to migrate |
-| --- | --- | --- |
-| 63 instances | 10m (default) | ~10.5 hours |
-| 63 instances | 1m | ~1 hour |
-
-Instances are taken in list order, so progress is steady rather than random. Reading it:
+Dry-run renders and logs the first deterministic candidate's changed
+top-level spec sections without logging values or writing the CR. Monitor:
 
 ```promql
-sum(bifrost_reconciler_adoptions_total{result="adopted"})     # total stamped, one per instance
-sum(increase(bifrost_reconciler_adoptions_total{result="unhealthy"}[1h]))  # candidates deferred
-bifrost_reconciler_unmanaged_instances                        # what is left (opt-outs included)
+bifrost_reconciler_adoption_remaining
+bifrost_reconciler_adoption_pending
+sum by (result) (increase(bifrost_reconciler_adoption_events_total[1h]))
 ```
-
-### The health gate
-
-A candidate is stamped only if its own status says `Reconciled=True` **and** `Degraded` is not
-`True`. Anything else — including an instance with no conditions at all — is counted as
-`result="unhealthy"`, logged at info, and left a candidate for every later sweep. It is a deferral,
-not an exclusion, and it is deliberately strict: an instance that is already unwell is the worst one
-to hand an extra reconcile and a connectivity check to.
-
-A steady `unhealthy` rate with a flat `adopted` total means adoption is making no progress at all.
-That looks identical to a finished migration if only the total is watched — check
-`bifrost_reconciler_unmanaged_instances` to tell them apart.
-
-### The halt
-
-Before choosing a new candidate, the sweep re-reads the instance it stamped last tick. If that
-instance now reports `Degraded=True` or `Reconciled=False`, **adoption stops entirely**: no further
-stamps, `bifrost_reconciler_adoptions_total{result="halted"}` increments once,
-`bifrost_reconciler_adoption_halted` goes to `1`, and an error line names the instance:
-
-```
-Unleash instance regressed after bifrost adopted it; halting fleet adoption until someone has looked at it
-```
-
-It does **not** recover on its own, not even if the instance goes healthy again — flapping is exactly
-what a failing instance does between two sweeps. Clearing it:
-
-1. Look at the named instance: `kubectl -n <unleash-ns> get unleash <name> -o yaml`, its conditions,
-   and its Deployment. Adoption itself only added a label; what is worth reading is what
-   unleasherator did in response.
-2. If the instance is fine and the halt was spurious, restart bifrost, or toggle `autoAdopt` off and
-   on (both are pod restarts — there is no runtime toggle, §1). Either resumes adoption from the
-   beginning of the remaining list.
-3. If it is not fine, leave adoption off until it is. The halt exists to buy exactly that time.
-
-### What the gate cannot prove
-
-The check is on **health, not acknowledgement.** A label edit does not bump `metadata.generation`, so
-`observedGeneration` never moves for bifrost's write, and a condition that was already `True` and
-stays `True` keeps its old `lastTransitionTime`. **Nothing in the status distinguishes "unleasherator
-processed our stamp and it was fine" from "unleasherator has not looked yet."** The sweep asserts
-only that the instance it touched is not visibly worse than before.
-
-That is why the pacing interval matters more than it looks: the resync interval is what gives the
-unobservable reconcile time to happen, and to show up in the status if it went badly. Shortening
-`resyncInterval` to speed a migration up shortens that window too.
-
-### State, and what a restart does
-
-The name of the last-stamped instance and the halt latch live in memory on the reconciler
-(`pkg/reconciler/unleash.go`, `UnleashReconciler`), written only by the single sweep goroutine.
-Bifrost is single-replica (chart pins `replicas: 1`, leader election off by default), so there is no
-second writer.
-
-A restart therefore forgets both: the next sweep has nothing to verify and stamps immediately, and a
-halt does not survive. That is the intended escape hatch — and it means a crash-looping bifrost with
-`autoAdopt` on would adopt one instance per start with nothing verified in between.
-**`bifrost_reconciler_adoption_halted` dropping from 1 to 0 without anyone deciding to clear it is
-that signal**, and the alert will simply resolve itself when it happens.

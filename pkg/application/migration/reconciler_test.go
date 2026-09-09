@@ -554,6 +554,20 @@ func TestReconciler_Start_SkipsAlreadyMigrated(t *testing.T) {
 	assert.Equal(t, "team-custom", repo.updateCalls[0])
 }
 
+func TestReconciler_MigrateInstance_SkipsPendingLegacyAdoption(t *testing.T) {
+	repo := NewMockUnleashRepository()
+	repo.AddInstance("test-instance", "6.2.0", "", true)
+	repo.crds["test-instance"].Annotations[kubernetes.AnnotationAdoption] = "pending"
+
+	channelRepo := NewMockReleaseChannelRepository()
+	channelRepo.AddChannel("stable", "unleash/unleash-server:6.3.0")
+	reconciler := newTestReconciler(repo, channelRepo, newTestConfig(true, "stable", testHealthTimeout), newTestLogger())
+
+	reconciler.migrateInstance(context.Background(), "test-instance", "stable")
+
+	assert.Empty(t, repo.updateCalls)
+}
+
 func TestReconciler_MigrateInstance_Success(t *testing.T) {
 	repo := NewMockUnleashRepository()
 	repo.AddInstance("test-instance", "6.2.0", "", true) // Must be healthy to migrate

@@ -178,17 +178,9 @@ type ReconcilerConfig struct {
 	// would change but never writes. This is the dark-launch step — enable the
 	// reconciler with DryRun on, confirm the blast radius, then set it false.
 	DryRun bool `env:"BIFROST_RECONCILER_DRY_RUN,default=false"`
-	// AutoAdopt makes the reconciler stamp the managed-by label on unlabelled
-	// Unleash instances in its own namespace, so a fleet created before the
-	// label existed becomes visible in one observable event instead of being
-	// adopted one user PUT at a time over months.
-	//
-	// It is a separate switch from Enabled and orthogonal to DryRun on purpose:
-	// adoption writes, but only metadata, and the intended rollout is
-	// Enabled+DryRun+AutoAdopt — measure the fleet before converging it. Folding
-	// it into DryRun would make "observe only, no writes" untrue; folding it
-	// into Enabled would make it impossible to turn off once the fleet is
-	// adopted, which it should be, since the sweep is then pure cost.
+	// AutoAdopt admits one Bifrost-managed legacy CR missing desired state per
+	// sweep. The CR-local pending marker blocks the next admission until
+	// current-generation health is verified. DryRun plans but never writes.
 	AutoAdopt bool `env:"BIFROST_RECONCILER_AUTO_ADOPT,default=false"`
 	// ResyncInterval is how often every managed instance is re-rendered even
 	// without a CR event, so global-config changes propagate and drift heals.
@@ -265,15 +257,11 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	// Adoption exists to queue instances created before the desired-state
-	// annotation did, so every instance it stamps arrives without a recorded
-	// intent. The reconciler observes those and never writes them, which is what
-	// makes adoption survivable — but that is a rule in one function, and the
-	// blast radius on the other side of it is every instance in the namespace
-	// rewritten from a lossy read-back of its own spec. Adoption therefore only
-	// runs alongside a reconciler that cannot write at all.
-	if c.Reconciler.AutoAdopt && !c.Reconciler.DryRun {
-		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_DRY_RUN=true: adoption queues instances that carry no desired-state annotation, and converging one means rendering it from a lossy read-back of its own spec")
+	if c.Reconciler.AutoAdopt && !c.Reconciler.Enabled {
+		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true requires BIFROST_RECONCILER_ENABLED=true")
+	}
+	if c.Reconciler.AutoAdopt && (c.Unleash.MigrationEnabled || c.Unleash.ChannelMigrationEnabled) {
+		return fmt.Errorf("BIFROST_RECONCILER_AUTO_ADOPT=true cannot run while custom-version or channel migration admission is enabled")
 	}
 
 	if c.Unleash.ChannelMigrationMaxCandidates < 0 {

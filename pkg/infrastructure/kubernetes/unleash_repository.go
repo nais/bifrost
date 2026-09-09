@@ -399,7 +399,7 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 	return instance
 }
 
-func isReadyForCurrentGeneration(crd *unleashv1.Unleash) bool {
+func IsReadyForCurrentGeneration(crd *unleashv1.Unleash) bool {
 	if !meta.IsStatusConditionTrue(crd.Status.Conditions, unleashv1.UnleashStatusConditionTypeReconciled) ||
 		!meta.IsStatusConditionTrue(crd.Status.Conditions, unleashv1.UnleashStatusConditionTypeConnected) {
 		return false
@@ -414,6 +414,10 @@ func isReadyForCurrentGeneration(crd *unleashv1.Unleash) bool {
 	}
 
 	return true
+}
+
+func isReadyForCurrentGeneration(crd *unleashv1.Unleash) bool {
+	return IsReadyForCurrentGeneration(crd)
 }
 
 // GetCRD retrieves an Unleash CRD (exported for use by application layer)

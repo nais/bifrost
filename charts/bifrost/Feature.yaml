@@ -65,16 +65,19 @@ values:
       type: bool
   backend.reconciler.dryRun:
     displayName: Reconciler dry-run (observe only, no writes)
-    description: Off by default after fleet observation. Bifrost converges only instances with recorded desired-state intent, and refuses to start if automatic adoption is enabled.
+    description: Off by default after fleet observation. With automatic adoption enabled, true renders the next legacy candidate without changing its CR.
     computed:
       template: 'false'
     config:
       type: bool
   backend.reconciler.autoAdopt:
-    displayName: Adopt unlabelled Unleash instances in bifrost's namespace
+    displayName: Progressively adopt legacy Unleash instances in bifrost's namespace
     description: >-
-      Off by default after the adoption phase. Re-enable only to adopt a newly
-      identified legacy instance. Adoption stamps only the managed-by label, never the desired-state annotation.
+      Off by default. Bifrost canonicalizes one managed legacy CR without valid
+      desired state at a time and marks it pending. It waits for current-generation
+      reconciliation and connectivity before admitting another CR. Unknown or
+      multiple adoption markers stop adoption. Do not enable with custom-version
+      or channel migration admission.
     computed:
       template: 'false'
     config:

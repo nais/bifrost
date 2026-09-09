@@ -186,6 +186,17 @@ explicitly declares the database downgrade safe. Target write failures and
 timeouts otherwise persist the `manual-recovery-required` phase for operator
 action.
 
+### Legacy adoption
+
+`BIFROST_RECONCILER_AUTO_ADOPT=true` is disabled by default. It only considers
+Bifrost-managed legacy CRs that lack valid `bifrost.nais.io/desired-state`.
+It canonicalizes one CR at a time, writes
+`bifrost.nais.io/adoption=pending`, then waits for current-generation
+reconciliation and connectivity before admitting another. Unknown or multiple
+markers stop adoption. Dry-run renders the deterministic next candidate
+without writes. Pending-marker cleanup continues when auto-admission is
+disabled.
+
 ## Development
 
 ### Prerequisites

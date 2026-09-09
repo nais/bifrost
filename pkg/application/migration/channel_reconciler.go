@@ -224,6 +224,12 @@ func (r *ChannelReconciler) newCandidates(
 		if withTransaction[crd.Name] {
 			continue
 		}
+		if crd.GetAnnotations()[kubernetes.AnnotationAdoption] != "" {
+			recordChannelMigrationEvent(channelEventSkippedAdoption)
+			r.logger.WithField("instance", crd.Name).
+				Info("Skipping channel migration candidate with a legacy-adoption marker")
+			continue
+		}
 		if !kubernetes.IsManagedByBifrost(crd) {
 			recordChannelMigrationEvent(channelEventSkippedUnmanaged)
 			continue
@@ -266,6 +272,9 @@ func (r *ChannelReconciler) admitTransaction(ctx context.Context, name, sourceCh
 		}
 		if crd.GetAnnotations()[channelMigrationAnnotation] != "" {
 			return nil
+		}
+		if crd.GetAnnotations()[kubernetes.AnnotationAdoption] != "" {
+			return ownershipError("instance has a pending legacy-adoption marker")
 		}
 		if !kubernetes.IsManagedByBifrost(crd) {
 			return ownershipError("instance is no longer managed by Bifrost")

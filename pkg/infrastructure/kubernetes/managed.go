@@ -26,26 +26,10 @@ const (
 	// migration transaction. The migration state machine updates it separately
 	// with annotation-only optimistic-lock patches.
 	AnnotationChannelMigration = "bifrost.nais.io/channel-migration"
-
-	// LabelAdopt opts an instance out of automatic adoption. It is a label
-	// rather than an annotation because the adopter's own List is label-scoped
-	// and because `kubectl get unleash -l bifrost.nais.io/adopt=false` is then
-	// the exemption list.
-	//
-	// Only the exact value AdoptOptOut exempts an instance; absence, an empty
-	// value, or anything unrecognised leaves it eligible. That direction is
-	// deliberate: adoption only adds a label and is undone by removing it, so a
-	// mistyped exemption costs a label that can be deleted, whereas
-	// presence-only semantics would make `adopt: "true"` silently mean the
-	// opposite of what it reads as.
-	// Only these two values are recognised. AdoptOptIn is not required to be
-	// adopted — absence is equivalent — but it is the value an operator can
-	// write to say "yes, on purpose", and having it named is what lets the
-	// adopter warn about everything else: "False", "no", "0" and "off" all read
-	// as an exemption and are all silently ignored.
-	LabelAdopt  = "bifrost.nais.io/adopt"
-	AdoptOptOut = "false"
-	AdoptOptIn  = "true"
+	// AnnotationAdoption is a CR-local, short-lived marker. Its only valid
+	// value is "pending", until Unleasherator reports the canonical CR healthy
+	// for its current generation.
+	AnnotationAdoption = "bifrost.nais.io/adoption"
 )
 
 // IntentSchemaVersion is the schema the desired-state annotation is written
@@ -119,14 +103,9 @@ func IsManagedByBifrost(crd *unleashv1.Unleash) bool {
 	return crd.GetLabels()[LabelManagedBy] == ManagedByBifrost
 }
 
-// ApplyManagedMetadata copies bifrost's rendered managed-by label and
+// ApplyManagedMetadata copies Bifrost's rendered managed-by label and
 // desired-state annotation onto a live CRD. It leaves finalizers,
-// ownerReferences, foreign metadata, and the separately managed channel
-// migration transaction alone.
-//
-// Bifrost owns these rendered keys plus AnnotationChannelMigration. Both
-// rendered write paths have to agree on the first two, while the migration
-// state machine is the only writer of the transaction annotation.
+// ownerReferences, foreign metadata, and temporary migration markers alone.
 func ApplyManagedMetadata(live, rendered *unleashv1.Unleash) {
 	if live.Labels == nil {
 		live.Labels = map[string]string{}

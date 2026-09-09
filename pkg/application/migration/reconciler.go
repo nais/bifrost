@@ -168,6 +168,12 @@ func (r *Reconciler) migrateInstance(ctx context.Context, name, targetChannel st
 		r.pending.remove(name)
 		return
 	}
+	if crd.Annotations[kubernetes.AnnotationAdoption] != "" {
+		log.Info("Skipping migration while legacy adoption is pending")
+		state.status = statusSkippedUnhealthy
+		r.pending.remove(name)
+		return
+	}
 
 	builder := kubernetes.LoadConfigFromCRD(crd)
 	builder.WithReleaseChannel(targetChannel)

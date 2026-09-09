@@ -101,6 +101,23 @@ func TestReconcilerActions_ExposeTheDocumentedLabelValues(t *testing.T) {
 	}
 }
 
+func TestAdoptionMetrics_ExposeBoundedState(t *testing.T) {
+	adoptionRemaining.Set(3)
+	adoptionPending.Set(1)
+	before := seriesValue(t, "bifrost_reconciler_adoption_events_total", map[string]string{"result": "blocked_unknown_marker"})
+	recordAdoptionEvent(adoptionEventBlockedUnknownMarker)
+
+	if got := seriesValue(t, "bifrost_reconciler_adoption_remaining", nil); got != 3 {
+		t.Errorf("adoption remaining = %v, want 3", got)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_pending", nil); got != 1 {
+		t.Errorf("adoption pending = %v, want 1", got)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoption_events_total", map[string]string{"result": "blocked_unknown_marker"}); got != before+1 {
+		t.Errorf("blocked unknown marker events = %v, want %v", got, before+1)
+	}
+}
+
 // The census has to see the whole namespace, not just the instances that still
 // carry the label — an instance that loses it must show up as unmanaged rather
 // than simply vanish.

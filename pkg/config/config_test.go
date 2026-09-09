@@ -169,25 +169,31 @@ func TestValidate_RejectsWhitespacePaddedValues(t *testing.T) {
 // allowed to write is then one relaxed rule away from converging all of them
 // from a lossy read-back of their own specs, so the pair is refused at startup
 // rather than guarded only where the writes happen.
-func TestValidate_RefusesAdoptionWithWritesEnabled(t *testing.T) {
+func TestValidate_RefusesAdoptionWithoutAReconcilerOrWithMigrationAdmission(t *testing.T) {
 	c := validConfig()
 	c.Reconciler.AutoAdopt = true
-	c.Reconciler.DryRun = false
 
 	err := c.Validate()
 	if err == nil {
-		t.Fatal("Validate() = nil for autoAdopt with dry-run off")
+		t.Fatal("Validate() = nil for autoAdopt without reconciler")
 	}
-	for _, want := range []string{"BIFROST_RECONCILER_AUTO_ADOPT", "BIFROST_RECONCILER_DRY_RUN"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("Validate() error = %q, want it to name %s", err, want)
-		}
+	if !strings.Contains(err.Error(), "BIFROST_RECONCILER_ENABLED") {
+		t.Errorf("Validate() error = %q, want it to name BIFROST_RECONCILER_ENABLED", err)
 	}
 
-	// And the intended rollout combination stays legal.
-	c.Reconciler.DryRun = true
+	c.Reconciler.Enabled = true
+	c.Unleash.ChannelMigrationEnabled = true
+	err = c.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil for autoAdopt with channel migration admission")
+	}
+	if !strings.Contains(err.Error(), "BIFROST_RECONCILER_AUTO_ADOPT") {
+		t.Errorf("Validate() error = %q, want it to name BIFROST_RECONCILER_AUTO_ADOPT", err)
+	}
+
+	c.Unleash.ChannelMigrationEnabled = false
 	if err := c.Validate(); err != nil {
-		t.Errorf("Validate() = %v for autoAdopt with dry-run on, want nil", err)
+		t.Errorf("Validate() = %v for enabled autoAdopt without migration admission, want nil", err)
 	}
 }
 

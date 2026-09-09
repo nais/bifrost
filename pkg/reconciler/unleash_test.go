@@ -41,6 +41,9 @@ func testConfig() *config.Config {
 }
 
 func addSchemeForTest(scheme *runtime.Scheme) error {
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return err
+	}
 	return unleashv1.AddToScheme(scheme)
 }
 
