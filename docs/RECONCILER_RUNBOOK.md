@@ -341,8 +341,9 @@ the loop silently never started.
 | `BifrostAdoptionCheckpointBlocked` | checkpoint state `failed` or `blocked` for 5 min | The fleet has stopped until a human restores the checkpoint or recovers the CR; see §8. |
 
 `BifrostAdoptionCheckpointBlocked` is not wrapped in the `reconciler.enabled` conditional. The
-metric is registered at process start and reads `0` where the loop is off, while it must still cover a
-tenant that enables the reconciler out of band.
+checkpoint-state series is absent until the adoption worker publishes a state, including where the
+loop is off. The alert remains inert for an absent series and still covers a tenant that enables the
+reconciler out of band.
 
 ### Why the census rule is gated in Helm rather than in PromQL
 

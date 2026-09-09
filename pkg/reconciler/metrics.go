@@ -125,7 +125,7 @@ const (
 var adoptionsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "bifrost_reconciler_adoptions_total",
-		Help: "Full legacy-adoption outcomes. adopted creates a pending UID-bound transaction, verified confirms current-generation health, previewed performs no writes, and error blocks progression.",
+		Help: "Full legacy-adoption outcomes. adopted creates a pending UID-bound transaction, verified confirms current-generation health, previewed performs no writes, refused skips an unsafe source shape, and error blocks progression.",
 	},
 	[]string{"result"},
 )

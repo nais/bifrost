@@ -24,6 +24,9 @@ func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 	}
 	list := &unleashv1.UnleashList{}
 	if err := r.client.List(ctx, list, client.InNamespace(ns)); err != nil {
+		setAdoptionCheckpointState(adoptionStateBlocked)
+		adoptionPendingVerification.Set(0)
+		adoptionsTotal.WithLabelValues(adoptionError).Inc()
 		r.logger.WithError(err).Warn("Failed to list Unleash instances for legacy adoption")
 		return
 	}

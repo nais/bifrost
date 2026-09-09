@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,8 +14,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func legacyInstance(t *testing.T, name string) *unleashv1.Unleash {
@@ -42,6 +46,15 @@ func get(t *testing.T, c client.Client, namespace, name string) *unleashv1.Unlea
 		t.Fatal(err)
 	}
 	return crd
+}
+
+func newFakeClientWith(t *testing.T, functions interceptor.Funcs, objects ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := addSchemeForTest(scheme); err != nil {
+		t.Fatal(err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(functions).Build()
 }
 
 func getCheckpoint(t *testing.T, c client.Client, namespace string) (*corev1.ConfigMap, *adoptionCheckpoint) {
@@ -223,6 +236,25 @@ func TestFullAdoption_RequiresExplicitCRApproval(t *testing.T) {
 
 	if kubernetes.IsManagedByBifrost(get(t, c, crd.Namespace, crd.Name)) {
 		t.Fatal("full adoption normalized a CR without explicit approval")
+	}
+}
+
+func TestFullAdoption_ReportsAListFailureAsBlocked(t *testing.T) {
+	crd := legacyInstance(t, "team-list-failure")
+	c := newFakeClientWith(t, interceptor.Funcs{
+		List: func(_ context.Context, _ client.WithWatch, _ client.ObjectList, _ ...client.ListOption) error {
+			return errors.New("Kubernetes API unavailable")
+		},
+	}, crd)
+	before := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": adoptionError})
+
+	fullAdopter(c, testConfig(), false).adoptFleet(context.Background())
+
+	if got := seriesValue(t, "bifrost_reconciler_adoption_checkpoint_state", map[string]string{"state": adoptionStateBlocked}); got != 1 {
+		t.Errorf("checkpoint state blocked = %v, want 1", got)
+	}
+	if got := seriesValue(t, "bifrost_reconciler_adoptions_total", map[string]string{"result": adoptionError}); got != before+1 {
+		t.Errorf("adoption errors = %v, want %v", got, before+1)
 	}
 }
 
