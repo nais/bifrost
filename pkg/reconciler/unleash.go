@@ -29,6 +29,7 @@ import (
 )
 
 const defaultResyncInterval = 10 * time.Minute
+const adoptionPollInterval = time.Minute
 
 // UnleashReconciler converges bifrost-managed Unleash CRs to their desired spec.
 // Legacy adoption uses a CR-local pending marker, so a restart cannot skip its
@@ -288,23 +289,34 @@ func (r *UnleashReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// runFleetSweep cleans up any pending legacy adoption and keeps the fleet
-// gauges current until the manager stops. New adoption writes remain gated by
-// AutoAdopt, but cleanup cannot be gated or a pending marker would persist
-// after the flag was turned off.
+// runFleetSweep keeps fleet gauges current on the normal resync interval. While
+// AutoAdopt is enabled, it polls the single pending adoption more frequently so
+// a healthy CR does not wait for the next fleet census before progression.
 func (r *UnleashReconciler) runFleetSweep(ctx context.Context) error {
-	ticker := time.NewTicker(r.resync)
-	defer ticker.Stop()
+	adoptionTicker := time.NewTicker(r.adoptionSweepInterval())
+	defer adoptionTicker.Stop()
+	censusTicker := time.NewTicker(r.resync)
+	defer censusTicker.Stop()
 
+	r.adoptFleet(ctx)
+	r.countInstances(ctx)
 	for {
-		r.adoptFleet(ctx)
-		r.countInstances(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-adoptionTicker.C:
+			r.adoptFleet(ctx)
+		case <-censusTicker.C:
+			r.countInstances(ctx)
 		}
 	}
+}
+
+func (r *UnleashReconciler) adoptionSweepInterval() time.Duration {
+	if r.config.Reconciler.AutoAdopt && r.resync > adoptionPollInterval {
+		return adoptionPollInterval
+	}
+	return r.resync
 }
 
 // countInstances sets the fleet gauges from a List of the whole namespace and

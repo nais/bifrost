@@ -13,8 +13,8 @@ import (
 
 const adoptionPendingMarker = "pending"
 
-// adoptFleet progresses at most one CR-local adoption marker per sweep. It
-// always cleans up a pending marker, while AutoAdopt only permits new writes.
+// adoptFleet keeps at most one CR-local adoption marker. It always cleans up a
+// healthy pending marker, and immediately admits the next CR when AutoAdopt is enabled.
 func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 	ns, err := instanceNamespace(r.config)
 	if err != nil {
@@ -64,7 +64,9 @@ func (r *UnleashReconciler) adoptFleet(ctx context.Context) {
 				Error("Refusing legacy adoption because the pending marker is not on a Bifrost-managed CR")
 			return
 		}
-		r.cleanupPendingAdoption(ctx, pending[0])
+		if r.cleanupPendingAdoption(ctx, pending[0]) && r.config.Reconciler.AutoAdopt {
+			r.adoptNext(ctx, list)
+		}
 		return
 	}
 	if !r.config.Reconciler.AutoAdopt {
@@ -104,22 +106,22 @@ func pendingAdoptions(list *unleashv1.UnleashList) ([]*unleashv1.Unleash, error)
 	return pending, nil
 }
 
-func (r *UnleashReconciler) cleanupPendingAdoption(ctx context.Context, crd *unleashv1.Unleash) {
+func (r *UnleashReconciler) cleanupPendingAdoption(ctx context.Context, crd *unleashv1.Unleash) bool {
 	if crd.DeletionTimestamp != nil {
 		recordAdoptionEvent(adoptionEventWaitingDeletion)
 		r.logger.WithField("instance", crd.Name).Info("Waiting for pending legacy adoption CR deletion")
-		return
+		return false
 	}
 	if !kubernetes.IsReadyForCurrentGeneration(crd) {
 		recordAdoptionEvent(adoptionEventWaitingHealthy)
 		r.logger.WithField("instance", crd.Name).
 			Info("Waiting for pending legacy adoption CR to report current-generation Reconciled=True and Connected=True")
-		return
+		return false
 	}
 	if r.dryRun {
 		recordAdoptionEvent(adoptionEventDryRun)
 		r.logger.WithField("instance", crd.Name).Info("Would remove healthy legacy-adoption pending marker (dry-run)")
-		return
+		return false
 	}
 
 	base := crd.DeepCopy()
@@ -128,13 +130,14 @@ func (r *UnleashReconciler) cleanupPendingAdoption(ctx context.Context, crd *unl
 		recordAdoptionEvent(adoptionEventError)
 		r.logger.WithField("instance", crd.Name).WithError(err).
 			Error("Failed to remove healthy legacy-adoption pending marker")
-		return
+		return false
 	}
 
 	adoptionPending.Set(0)
 	recordAdoptionEvent(adoptionEventVerified)
 	r.logger.WithField("instance", crd.Name).
 		Info("Removed healthy legacy-adoption pending marker")
+	return true
 }
 
 func (r *UnleashReconciler) adoptNext(ctx context.Context, list *unleashv1.UnleashList) {
