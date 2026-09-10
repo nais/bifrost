@@ -203,7 +203,7 @@ func TestLegacyAdoptionCanonicalizesHistoricalV6(t *testing.T) {
 	}
 }
 
-func TestLegacyAdoptionProgressesOneCRPerHealthySweep(t *testing.T) {
+func TestLegacyAdoptionImmediatelyAdmitsNextCRAfterHealthyVerification(t *testing.T) {
 	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
 	c := newFakeClient(t, first, second)
 	r := adoptionReconciler(c, true, false)
@@ -222,13 +222,8 @@ func TestLegacyAdoptionProgressesOneCRPerHealthySweep(t *testing.T) {
 	if _, present := get(t, c, first.Namespace, first.Name).Annotations[kubernetes.AnnotationAdoption]; present {
 		t.Fatal("did not remove the healthy pending marker")
 	}
-	if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
-		t.Fatal("adopted second CR in the pending-marker cleanup sweep")
-	}
-
-	r.adoptFleet(context.Background())
 	if marker := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationAdoption]; marker != adoptionPendingMarker {
-		t.Fatalf("second marker = %q, want pending", marker)
+		t.Fatalf("second marker = %q, want pending after the first CR was verified", marker)
 	}
 }
 
@@ -292,15 +287,18 @@ func TestLegacyAdoptionAcceptsLatestCurrentGenerationWhilePending(t *testing.T) 
 }
 
 func TestLegacyAdoptionCleansPendingMarkerAfterAutoAdoptIsDisabled(t *testing.T) {
-	crd := legacyInstance(t, "team-a")
-	c := newFakeClient(t, crd)
+	first, second := legacyInstance(t, "team-a"), legacyInstance(t, "team-b")
+	c := newFakeClient(t, first, second)
 	adoptionReconciler(c, true, false).adoptFleet(context.Background())
-	makeCurrentGenerationHealthy(t, c, get(t, c, crd.Namespace, crd.Name))
+	makeCurrentGenerationHealthy(t, c, get(t, c, first.Namespace, first.Name))
 
 	adoptionReconciler(c, false, false).adoptFleet(context.Background())
 
-	if _, present := get(t, c, crd.Namespace, crd.Name).Annotations[kubernetes.AnnotationAdoption]; present {
+	if _, present := get(t, c, first.Namespace, first.Name).Annotations[kubernetes.AnnotationAdoption]; present {
 		t.Fatal("autoAdopt=false did not clean up a healthy pending marker")
+	}
+	if _, present := get(t, c, second.Namespace, second.Name).Annotations[kubernetes.AnnotationDesiredState]; present {
+		t.Fatal("autoAdopt=false admitted a new CR")
 	}
 }
 
