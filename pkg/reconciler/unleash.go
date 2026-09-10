@@ -28,8 +28,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
-const defaultResyncInterval = 10 * time.Minute
-const adoptionPollInterval = time.Minute
+const (
+	defaultResyncInterval = 10 * time.Minute
+	adoptionPollInterval  = time.Minute
+)
 
 // UnleashReconciler converges bifrost-managed Unleash CRs to their desired spec.
 // Legacy adoption uses a CR-local pending marker, so a restart cannot skip its
