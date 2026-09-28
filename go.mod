@@ -17,7 +17,7 @@ require (
 	google.golang.org/api v0.297.0
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.35.8
-	k8s.io/apimachinery v0.35.8
+	k8s.io/apimachinery v0.35.9
 	k8s.io/client-go v0.35.8
 	sigs.k8s.io/controller-runtime v0.22.5
 )
