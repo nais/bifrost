@@ -15,17 +15,19 @@ spec:
     - name: unleash_database_alerts
       rules:
       - alert: UnleashHighDatabaseLatency
-        expr: sum(db_query_duration_seconds{quantile="0.9", namespace="{{ $instanceNamespace }}"}) by (service) > 0.5
+        expr: max(db_query_duration_seconds{quantile="0.9", namespace="{{ $instanceNamespace }}"}) by (service) > 0.5
         for: 10m
         labels:
-          severity: warning
+          severity: info
           namespace: {{ .Release.Namespace }}
+          alert_type: custom
+          channel: nais-alerts-info
         annotations:
           summary: |
-            {{ "The p99 database query latency for Unleash instance `{{ $labels.service }}` has been above 0.5 seconds for the last 5 minutes." }}
-          consequence: "Applications may experience slow response times from Unleash API and UI."
+            {{ "The highest per-operation p90 database query latency for Unleash instance `{{ $labels.service }}` has been above 0.5 seconds for the last 10 minutes." }}
+          consequence: "A database operation is slow; this does not necessarily indicate slow Unleash API or UI responses."
           action: |
-            {{ "Check the database for slow queries and add indexes where appropriate." }}
+            {{ "Identify the store, action and pod with slow queries, check query counts and HTTP latency/errors, then investigate database waits or SQL if there is sustained degradation." }}
 
     - name: unleash_http_alerts
       rules:
