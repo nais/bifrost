@@ -75,6 +75,8 @@ spec:
               value: /var/secrets/google/service-account-credentials.json
             {{- end }}
             # Unleash
+            - name: BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED
+              value: {{ .Values.backend.unleash.resourceProfilesEnabled | quote }}
             - name: BIFROST_UNLEASH_SQL_INSTANCE_ID
               value: {{ .Values.backend.unleash.sqlInstanceId | required ".unleash.sqlInstanceId is required" | quote }}
             - name: BIFROST_UNLEASH_SQL_INSTANCE_ADDRESS

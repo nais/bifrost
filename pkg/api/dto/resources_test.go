@@ -27,6 +27,14 @@ func TestResourceProfileRequestPresence(t *testing.T) {
 		{`{"resource_profile":null}`, "", false, false},
 		{`{"resource_profile":"Small"}`, "", false, false},
 		{`{"resource_profile":"huge"}`, "", false, false},
+		{`{"RESOURCE_PROFILE":""}`, "", false, false},
+		{`{"RESOURCE_PROFILE":null}`, "", false, false},
+		{`{"RESOURCE_PROFILE":"huge"}`, "", false, false},
+		{`{"Resource_Profile":""}`, "", false, false},
+		{`{"Resource_Profile":null}`, "", false, false},
+		{`{"Resource_Profile":"huge"}`, "", false, false},
+		{`{"RESOURCE_PROFILE":"small"}`, "", false, false},
+		{`{"resource_profile":"small","Resource_Profile":"large"}`, "", false, false},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			var req UnleashConfigRequest

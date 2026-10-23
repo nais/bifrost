@@ -86,15 +86,20 @@ Responses retain the existing CRD shape and add
 | large | 100m | 512Mi | 1Gi |
 
 The table is provisional, **not capacity approval**. Selection and enforcement
-default off (`BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED=false`). Review aggregate
-reservations and measured demand before activation, then validate on dev-nais,
+default off (`BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED=false`).
+Set `backend.unleash.resourceProfilesEnabled` in Helm/Fasit for the selected
+environment (default `false`; set back to `false` to disable safely).
+Review aggregate reservations and measured demand before activation, then validate on dev-nais,
 not nav. Verify the deployed revision and reconciler settings separately.
 Merging ships through ci-nais and tenant fan-out; it does not resize the fleet.
 nais/api and Console selection are separate integration work (see #641/#640).
 
 Absent selection displays inherited small without acquiring resource ownership.
-Live tuning, CPU limits, extra resource keys, replicas and sidecars survive
-unrelated writes. New instances retain the historical small defaults and no CPU
+Live tuning, CPU limits, extra resource keys, replicas and sidecar resources survive
+unrelated writes. Other managed sidecar fields (image, args and security settings)
+still reconcile; unknown live sidecars follow the rendered spec. Profile-only writes
+preserve the entire live spec apart from the selected Unleash resource keys.
+New instances retain the historical small defaults and no CPU
 limit, persisting explicit small intent even when selection is disabled.
 Explicit selection owns only CPU request and memory request/limit.
 It may roll out the Deployment; downsizing is not safe merely because an

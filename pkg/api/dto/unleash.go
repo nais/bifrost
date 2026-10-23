@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
@@ -42,6 +43,11 @@ func (r *UnleashConfigRequest) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
+	}
+	for key := range fields {
+		if strings.EqualFold(key, "resource_profile") && key != "resource_profile" {
+			return fmt.Errorf("noncanonical resource_profile field %q", key)
+		}
 	}
 	if _, present := fields["resource_profile"]; present {
 		if decoded.ResourceProfile == nil || !unleash.ValidResourceProfile(*decoded.ResourceProfile) {

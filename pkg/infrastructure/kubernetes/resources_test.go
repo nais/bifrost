@@ -40,15 +40,31 @@ func TestResourceProfilesOnlyOwnThreeResourceKeys(t *testing.T) {
 			live, cfg := tunedInstance(t)
 			cfg.ResourceProfile = profile
 			desired := BuildUnleashCRD(repoTestConfig(), cfg)
+			proxy := desired.Spec.ExtraContainers[0].DeepCopy()
 			MergeResourceOwnership(live, &desired, profile, true)
 			assert.True(t, unleash.ResourcesMatchProfile(desired.Spec.Resources, profile))
 			assert.Equal(t, live.Spec.Resources.Limits[corev1.ResourceCPU], desired.Spec.Resources.Limits[corev1.ResourceCPU])
 			assert.Equal(t, live.Spec.Resources.Requests[corev1.ResourceEphemeralStorage], desired.Spec.Resources.Requests[corev1.ResourceEphemeralStorage])
 			assert.Equal(t, live.Spec.Size, desired.Spec.Size)
-			assert.Equal(t, live.Spec.ExtraContainers, desired.Spec.ExtraContainers)
+			proxy.Resources = live.Spec.ExtraContainers[0].Resources
+			assert.Equal(t, *proxy, desired.Spec.ExtraContainers[0])
 			assert.Equal(t, resource.MustParse("768Mi"), live.Spec.Resources.Requests[corev1.ResourceMemory], "merge must not alias its input")
 		})
 	}
+}
+
+func TestSidecarResourcesFollowNamesNotPositions(t *testing.T) {
+	live, cfg := tunedInstance(t)
+	live.Spec.ExtraContainers = append([]corev1.Container{{Name: "unknown", Image: "unmanaged"}}, live.Spec.ExtraContainers...)
+	desired := BuildUnleashCRD(repoTestConfig(), cfg)
+	desired.Spec.ExtraContainers = append(desired.Spec.ExtraContainers, corev1.Container{Name: "new", Image: "managed"})
+	MergeResourceOwnership(live, &desired, "", false)
+	require.Len(t, desired.Spec.ExtraContainers, 2, "unknown live sidecars must not be adopted")
+	assert.Equal(t, "sql-proxy", desired.Spec.ExtraContainers[0].Name)
+	assert.Equal(t, live.Spec.ExtraContainers[1].Resources, desired.Spec.ExtraContainers[0].Resources)
+	assert.Equal(t, "new", desired.Spec.ExtraContainers[1].Name)
+	desired.Spec.ExtraContainers[0].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("1Gi")
+	assert.Equal(t, resource.MustParse("333Mi"), live.Spec.ExtraContainers[1].Resources.Limits[corev1.ResourceMemory], "sidecar resources must not alias live maps")
 }
 
 func TestProfileRepositoryWritesPreserveLiveTuningAndIntent(t *testing.T) {
@@ -199,7 +215,8 @@ func TestVersionChannelChangesRetainResourceOwnershipWhenDisabled(t *testing.T) 
 			after, err := repo.GetCRD(context.Background(), live.Name)
 			require.NoError(t, err)
 			assert.Equal(t, live.Spec.Resources, after.Spec.Resources)
-			assert.Equal(t, live.Spec.ExtraContainers, after.Spec.ExtraContainers)
+			assert.Equal(t, live.Spec.ExtraContainers[0].Resources, after.Spec.ExtraContainers[0].Resources)
+			assert.Equal(t, BuildUnleashCRD(repoTestConfig(), cfg).Spec.ExtraContainers[0].Args, after.Spec.ExtraContainers[0].Args)
 			assert.Equal(t, live.Spec.Size, after.Spec.Size)
 			assert.Equal(t, live.Spec.Database, after.Spec.Database, "database and credential references must not change")
 			intent, err := UnmarshalIntent(after.Annotations[AnnotationDesiredState])

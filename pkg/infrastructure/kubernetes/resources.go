@@ -8,10 +8,17 @@ import (
 )
 
 // MergeResourceOwnership is shared by API, migration, adoption and reconciliation
-// writers. Replicas, sidecars, CPU limits and unowned resource keys stay live.
+// writers. Replicas, sidecar resources, CPU limits and unowned resource keys stay live.
 func MergeResourceOwnership(live, desired *unleashv1.Unleash, profile string, enabled bool) {
 	desired.Spec.Size = live.Spec.Size
-	desired.Spec.ExtraContainers = live.DeepCopy().Spec.ExtraContainers
+	for i := range desired.Spec.ExtraContainers {
+		for _, container := range live.Spec.ExtraContainers {
+			if desired.Spec.ExtraContainers[i].Name == container.Name {
+				desired.Spec.ExtraContainers[i].Resources = *container.Resources.DeepCopy()
+				break
+			}
+		}
+	}
 	desired.Spec.Resources = *live.Spec.Resources.DeepCopy()
 	if profile == "" || !enabled {
 		return
