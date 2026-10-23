@@ -220,6 +220,8 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 		return fmt.Errorf("cannot update unreadable intent: %w", err)
 	}
 	merged := *cfg
+	// API readback is not a request to adopt live credentials into recorded intent.
+	merged.FederationNonce = previous.FederationNonce
 	if merged.ResourceProfile == "" {
 		merged.ResourceProfile = previous.ResourceProfile
 	}
@@ -246,23 +248,26 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 		newVersionSource = "releaseChannel"
 	}
 
-	// Update FQDN network policy
-	profileOnly := profileOnlyChange(previous, cfg)
-	if !profileOnly {
+	if opts.ProfileOnly && (cfg.ResourceProfile == "" || !profileOnlyChange(previous, cfg)) {
+		return fmt.Errorf("profile-only update must not change other desired-state fields")
+	}
+
+	var unleashNew unleashv1.Unleash
+	if opts.ProfileOnly {
+		// Profile selection must not re-render unrelated live tuning.
+		unleashNew = *unleashOld.DeepCopy()
+		stampManagedMetadata(&unleashNew, cfg)
+	} else {
+		unleashNew = BuildUnleashUpdateCRD(r.config, cfg, unleashOld)
+	}
+	if err := MergeResourceOwnership(unleashOld, &unleashNew, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled); err != nil {
+		return err
+	}
+	if !opts.ProfileOnly {
 		if err := r.updateFQDNNetworkPolicy(ctx, cfg.Name); err != nil {
 			return err
 		}
 	}
-
-	var unleashNew unleashv1.Unleash
-	if profileOnly {
-		// Rendering could mint a nonce; profile selection must not rotate credentials.
-		unleashNew = *unleashOld.DeepCopy()
-		stampManagedMetadata(&unleashNew, cfg)
-	} else {
-		unleashNew = BuildUnleashCRD(r.config, cfg)
-	}
-	MergeResourceOwnership(unleashOld, &unleashNew, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled)
 
 	// Keep the live object's metadata and lay bifrost's own fields back on top.
 	// The render only ever fills in name, namespace and bifrost's two managed
@@ -739,11 +744,6 @@ func getEnvVar(crd *unleashv1.Unleash, name, defaultValue string) string {
 
 // BuildUnleashCRD creates an Unleash CRD from domain config
 func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
-	cloudSqlProto := corev1.ProtocolTCP
-	cloudSqlPort := intstr.FromInt(3307)
-	grpcProto := corev1.ProtocolTCP
-	grpcPort := intstr.FromInt(3001)
-
 	// Mint a nonce on first create and write it back to cfg, not just into the
 	// spec. stampManagedMetadata records cfg as the desired-state annotation, so
 	// keeping the minted value local would store an intent that disagrees with
@@ -751,6 +751,24 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 	if cfg.FederationNonce == "" {
 		cfg.FederationNonce = utils.RandomString(8)
 	}
+	return buildUnleashCRD(c, cfg)
+}
+
+// BuildUnleashUpdateCRD preserves live credentials without adopting them into intent.
+func BuildUnleashUpdateCRD(c *config.Config, cfg *unleash.Config, live *unleashv1.Unleash) unleashv1.Unleash {
+	render := *cfg
+	render.FederationNonce = live.Spec.Federation.SecretNonce
+	server := buildUnleashCRD(c, &render)
+	stampManagedMetadata(&server, cfg)
+	return server
+}
+
+func buildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
+	cloudSqlProto := corev1.ProtocolTCP
+	cloudSqlPort := intstr.FromInt(3307)
+	grpcProto := corev1.ProtocolTCP
+	grpcPort := intstr.FromInt(3001)
+
 	federationNonce := cfg.FederationNonce
 
 	const (

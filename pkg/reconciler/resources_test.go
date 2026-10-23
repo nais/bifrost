@@ -23,6 +23,7 @@ func TestProfileReconcileOwnershipAndDisable(t *testing.T) {
 				live := kubernetes.BuildUnleashCRD(testConfig(), cfg)
 				live.Spec.Size = 3
 				live.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("777Mi")
+				live.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("2Gi")
 				live.Spec.Resources.Requests[corev1.ResourceEphemeralStorage] = resource.MustParse("1Gi")
 				live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
 				live.Spec.ExtraContainers[0].Args = []string{"tuned-proxy"}
@@ -36,7 +37,7 @@ func TestProfileReconcileOwnershipAndDisable(t *testing.T) {
 				want := live.DeepCopy()
 				want.Spec.ApiIngress.Class = testConfig().Unleash.InstanceAPIIngressClass
 				want.Spec.ExtraContainers = kubernetes.BuildUnleashCRD(r.config, cfg).Spec.ExtraContainers
-				kubernetes.MergeResourceOwnership(&live, want, profile, enabled)
+				require.NoError(t, kubernetes.MergeResourceOwnership(&live, want, profile, enabled))
 				// Merge patches omit empty slices, just as the API server does.
 				raw, err := json.Marshal(want)
 				require.NoError(t, err)
@@ -79,6 +80,7 @@ func TestProfileIntroductionDoesNotWriteLegacyAnnotations(t *testing.T) {
 		require.NoError(t, err)
 		live.Annotations[kubernetes.AnnotationDesiredState] = string(raw)
 		live.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("777Mi")
+		live.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("2Gi")
 		c := newFakeClient(t, &live)
 		r := newReconciler(c)
 		r.config.Unleash.ResourceProfilesEnabled = true
@@ -88,6 +90,30 @@ func TestProfileIntroductionDoesNotWriteLegacyAnnotations(t *testing.T) {
 		after := &unleashv1.Unleash{}
 		require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(&live), after))
 		assert.Equal(t, before, after, "inheritance must not write spec or annotation bytes")
+	}
+}
+
+func TestIncompatibleProfileLimitReconcileFailsClosed(t *testing.T) {
+	for _, profile := range []string{"", "medium"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(profile+"/enabled="+map[bool]string{true: "true", false: "false"}[enabled], func(t *testing.T) {
+				cfg := intentFor(t, "team-a")
+				cfg.ResourceProfile = profile
+				live := kubernetes.BuildUnleashCRD(testConfig(), cfg)
+				live.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("25m")
+				live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("50m")
+				if profile != "" && enabled {
+					live.Spec.ApiIngress.Class = "unrelated-drift"
+				}
+				c := newFakeClient(t, &live)
+				r := newReconciler(c)
+				r.config.Unleash.ResourceProfilesEnabled = enabled
+				before := get(t, c, live.Namespace, live.Name)
+				require.NoError(t, reconcileOnce(r, before))
+				after := get(t, c, live.Namespace, live.Name)
+				assert.Equal(t, before, after, "incompatible enforcement must not apply even unrelated changes; absent/disabled ownership preserves resources")
+			})
+		}
 	}
 }
 

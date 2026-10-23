@@ -89,26 +89,12 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
 
-	// Preserve the existing federation nonce so rendering is deterministic;
-	// otherwise BuildUnleashCRD would mint a fresh random nonce every reconcile
-	// and the spec would never converge.
-	recorded := *cfg
-	if crd.Spec.Federation.SecretNonce != "" {
-		cfg.FederationNonce = crd.Spec.Federation.SecretNonce
+	desired := kubernetes.BuildUnleashUpdateCRD(r.config, cfg, crd)
+	if err := kubernetes.MergeResourceOwnership(crd, &desired, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled); err != nil {
+		recordAction(actionIntentError, reasonNone)
+		log.WithError(err).Error("Resource profile is incompatible with live limits; skipping reconcile")
+		return ctrl.Result{RequeueAfter: r.resync}, nil
 	}
-
-	desired := kubernetes.BuildUnleashCRD(r.config, cfg)
-	if recorded.FederationNonce == "" {
-		// An unspecified legacy nonce is not permission to rotate live credentials
-		// or promote their readback into intent when selecting a profile.
-		desired.Spec.Federation.SecretNonce = crd.Spec.Federation.SecretNonce
-		intent, err := kubernetes.MarshalIntent(&recorded)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		desired.Annotations[kubernetes.AnnotationDesiredState] = intent
-	}
-	kubernetes.MergeResourceOwnership(crd, &desired, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled)
 	if kubernetes.IntentEqual(crd.GetAnnotations()[kubernetes.AnnotationDesiredState], desired.GetAnnotations()[kubernetes.AnnotationDesiredState]) {
 		desired.Annotations[kubernetes.AnnotationDesiredState] = crd.Annotations[kubernetes.AnnotationDesiredState]
 	}

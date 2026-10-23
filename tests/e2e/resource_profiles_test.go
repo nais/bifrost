@@ -97,23 +97,29 @@ func TestResourceProfilesKind(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, denied.StatusCode(), "HTTP must enforce the chart-provided API key")
 
 	for _, fixture := range []struct {
-		name, nonce string
-		recorded    bool
+		name, nonce            string
+		recorded, incompatible bool
 	}{
-		{"unannotated", "ci-live-nonce", false},
-		{"legacy-live-nonce", "ci-live-nonce", true},
-		{"legacy-empty-nonce", "", true},
+		{name: "unannotated", nonce: "cilivenonce"},
+		{name: "legacy-live-nonce", nonce: "cilivenonce", recorded: true},
+		{name: "legacy-empty-nonce", recorded: true},
+		{name: "incompatible-cpu-limit", nonce: "cilivenonce", recorded: true, incompatible: true},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			name := fixture.name + "-" + os.Getenv("BIFROST_E2E_ENABLED")
-			intent, err := unleash.NewConfigBuilder().WithName(name).WithCustomVersion("5.1.0").WithFederation("render-only", "ci-team", "", "").Build()
+			intent, err := unleash.NewConfigBuilder().WithName(name).WithCustomVersion("5.1.0").WithFederation("renderonly", "ci-team", "", "").Build()
 			require.NoError(t, err)
 			live := kubernetes.BuildUnleashCRD(cfg, intent)
 			live.Spec.Federation.SecretNonce = fixture.nonce
 			live.Spec.Size = 4
 			live.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("777Mi")
+			live.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("2Gi")
 			live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
 			live.Spec.ExtraContainers[0].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("333Mi")
+			if fixture.incompatible {
+				live.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("25m")
+				live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("50m")
+			}
 			intent.FederationNonce = ""
 			if fixture.recorded {
 				if !enabled {
@@ -144,7 +150,7 @@ func TestResourceProfilesKind(t *testing.T) {
 			response, err := api.UpdateInstanceWithResponse(ctx, name, bifrostclient.UpdateInstanceJSONRequestBody{ResourceProfile: &profile})
 			require.NoError(t, err)
 			after := read()
-			if !fixture.recorded || !enabled {
+			if !fixture.recorded || !enabled || fixture.incompatible {
 				require.Equal(t, http.StatusBadRequest, response.StatusCode(), "profile selection should be rejected")
 				assert.Equal(t, before, after, "rejection must not write or adopt")
 			} else {

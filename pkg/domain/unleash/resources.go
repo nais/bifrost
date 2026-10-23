@@ -1,9 +1,23 @@
 package unleash
 
 import (
+	"errors"
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+var ErrIncompatibleResources = errors.New("resource requests exceed retained limits")
+
+func ValidateResourceRequests(resources corev1.ResourceRequirements) error {
+	for name, request := range resources.Requests {
+		if limit, present := resources.Limits[name]; present && request.Cmp(limit) > 0 {
+			return fmt.Errorf("%w: %s", ErrIncompatibleResources, name)
+		}
+	}
+	return nil
+}
 
 func ValidResourceProfile(profile string) bool {
 	return profile == "small" || profile == "medium" || profile == "large"

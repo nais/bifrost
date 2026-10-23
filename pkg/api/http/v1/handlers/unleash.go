@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -383,8 +384,13 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	// in between is overwritten by preserved values that are already stale.
 	crd, err := h.service.Update(ctx, config, domainunleash.UpdateOptions{
 		ExpectedResourceVersion: existing.ResourceVersion,
+		ProfileOnly:             req.ProfileOnly,
 	})
 	if err != nil {
+		if errors.Is(err, domainunleash.ErrIncompatibleResources) {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "incompatible_resources", Message: err.Error(), StatusCode: http.StatusBadRequest})
+			return
+		}
 		// A conflict means somebody else wrote first, so the request is not
 		// wrong and the server is not broken: the caller has to re-read and
 		// decide again. Reporting it as a 500 hides a retryable outcome.

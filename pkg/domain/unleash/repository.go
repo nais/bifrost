@@ -6,13 +6,16 @@ import (
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 )
 
-// UpdateOptions carries write preconditions for Repository.Update.
+// UpdateOptions carries write intent and preconditions for Repository.Update.
 //
 // It exists because Update renders a whole instance from a Config the caller
 // built earlier, from data it read even earlier. Without a precondition the
 // write lands unconditionally and whatever another writer stored in between is
 // gone with no error to notice it by.
 type UpdateOptions struct {
+	// ProfileOnly preserves the entire live spec except selected resource keys.
+	// The repository rejects it if the config changes any other intent fields.
+	ProfileOnly bool
 	// ExpectedResourceVersion, when non-empty, makes the write conditional on
 	// the instance still being at that version; if it is not, the update fails
 	// with a Kubernetes Conflict the caller can surface or retry.

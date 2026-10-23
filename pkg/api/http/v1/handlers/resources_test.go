@@ -43,6 +43,10 @@ func TestProfileAPIWritesAndValidation(t *testing.T) {
 		profile string
 	}{
 		{`{"resource_profile":"medium"}`, true, http.StatusOK, "medium"},
+		{`{"resource_profile":"medium","unknown":true}`, true, http.StatusOK, "medium"},
+		{`{"resource_profile":"medium","Name":"team-a"}`, true, http.StatusOK, "medium"},
+		{`{"resource_profile":"medium","enable_federation":false}`, true, http.StatusOK, "medium"},
+		{`{"resource_profile":"medium","log_level":null,"allowed_teams":null,"custom_version":""}`, true, http.StatusOK, "medium"},
 		{`{"resource_profile":"small"}`, true, http.StatusOK, "small"},
 		{`{"log_level":"debug"}`, true, http.StatusOK, ""},
 		{`{"resource_profile":null}`, true, http.StatusBadRequest, ""},
@@ -57,6 +61,7 @@ func TestProfileAPIWritesAndValidation(t *testing.T) {
 			live := kubernetes.BuildUnleashCRD(settings, cfg)
 			live.Spec.Size = 4
 			live.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("777Mi")
+			live.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("2Gi")
 			live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
 			live.Spec.ExtraContainers[0].Args = []string{"tuned-proxy"}
 			scheme := runtime.NewScheme()
@@ -83,7 +88,7 @@ func TestProfileAPIWritesAndValidation(t *testing.T) {
 			}
 			want := before.DeepCopy()
 			if tc.profile != "" {
-				kubernetes.MergeResourceOwnership(before, want, tc.profile, true)
+				require.NoError(t, kubernetes.MergeResourceOwnership(before, want, tc.profile, true))
 				assert.Equal(t, want.Spec, after.Spec, "profile-only HTTP updates must preserve the whole unrelated spec")
 			} else {
 				assert.Equal(t, before.Spec.Resources, after.Spec.Resources)
@@ -130,8 +135,8 @@ func (db forbiddenDatabaseOperations) DeleteSecret(context.Context, string) erro
 func TestProfileSelectionRequiresIntentAndPreservesLegacyNonceThroughReconcile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, tc := range []struct {
-		name, body, liveNonce        string
-		recorded, disabled, conflict bool
+		name, body, liveNonce                      string
+		recorded, disabled, conflict, incompatible bool
 	}{
 		{name: "unannotated-profile-only", body: `{"resource_profile":"medium"}`, liveNonce: "live-nonce"},
 		{name: "unannotated-mixed-update", body: `{"resource_profile":"medium","log_level":"debug"}`, liveNonce: "live-nonce"},
@@ -139,6 +144,7 @@ func TestProfileSelectionRequiresIntentAndPreservesLegacyNonceThroughReconcile(t
 		{name: "both-nonces-empty", body: `{"resource_profile":"medium"}`, recorded: true},
 		{name: "disabled", body: `{"resource_profile":"medium"}`, liveNonce: "live-nonce", recorded: true, disabled: true},
 		{name: "optimistic-conflict", body: `{"resource_profile":"medium"}`, liveNonce: "live-nonce", recorded: true, conflict: true},
+		{name: "incompatible-cpu-limit", body: `{"resource_profile":"medium"}`, liveNonce: "live-nonce", recorded: true, incompatible: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -153,8 +159,13 @@ func TestProfileSelectionRequiresIntentAndPreservesLegacyNonceThroughReconcile(t
 			live.Spec.Federation.SecretNonce = tc.liveNonce
 			live.Spec.Size = 4
 			live.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("777Mi")
+			live.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("2Gi")
 			live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
 			live.Spec.ExtraContainers[0].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("333Mi")
+			if tc.incompatible {
+				live.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("25m")
+				live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("50m")
+			}
 			cfg.FederationNonce = ""
 			if tc.recorded {
 				raw, err := kubernetes.MarshalIntent(cfg)
@@ -214,7 +225,7 @@ func TestProfileSelectionRequiresIntentAndPreservesLegacyNonceThroughReconcile(t
 				assert.Equal(t, before.Annotations[kubernetes.AnnotationDesiredState], after.Annotations[kubernetes.AnnotationDesiredState])
 				assert.NotEqual(t, before.ResourceVersion, after.ResourceVersion)
 				assert.EqualValues(t, 1, updateAttempts.Load())
-			} else if tc.recorded && !tc.disabled {
+			} else if tc.recorded && !tc.disabled && !tc.incompatible {
 				require.Equal(t, http.StatusOK, response.StatusCode(), string(response.Body))
 				require.NotNil(t, response.JSON200)
 				require.NotNil(t, response.JSON200.ResourceProfile)
@@ -230,7 +241,7 @@ func TestProfileSelectionRequiresIntentAndPreservesLegacyNonceThroughReconcile(t
 				require.NotNil(t, response.JSON200.ResolvedResources.Limits)
 				assert.Equal(t, "512Mi", (*response.JSON200.ResolvedResources.Limits)["memory"])
 				want := before.DeepCopy()
-				kubernetes.MergeResourceOwnership(before, want, "medium", true)
+				require.NoError(t, kubernetes.MergeResourceOwnership(before, want, "medium", true))
 				assert.Equal(t, want.Spec, after.Spec, "only selected resource keys may change, never credentials or database references")
 				assert.Equal(t, resource.MustParse("100m"), after.Spec.Resources.Requests[corev1.ResourceCPU])
 				assert.Equal(t, resource.MustParse("256Mi"), after.Spec.Resources.Requests[corev1.ResourceMemory])
@@ -245,6 +256,8 @@ func TestProfileSelectionRequiresIntentAndPreservesLegacyNonceThroughReconcile(t
 				require.Equal(t, http.StatusBadRequest, response.StatusCode(), string(response.Body))
 				if tc.disabled {
 					assert.Contains(t, string(response.Body), "resource_profiles_disabled")
+				} else if tc.incompatible {
+					assert.Contains(t, string(response.Body), "incompatible_resources")
 				} else {
 					assert.Contains(t, string(response.Body), "recorded_intent_required")
 				}

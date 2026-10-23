@@ -53,12 +53,10 @@ func (r *UnleashConfigRequest) UnmarshalJSON(data []byte) error {
 		if decoded.ResourceProfile == nil || !unleash.ValidResourceProfile(*decoded.ResourceProfile) {
 			return fmt.Errorf("resource_profile must be small, medium or large, not empty or null")
 		}
-		decoded.ProfileOnly = true
-		for key := range fields {
-			if key != "resource_profile" && key != "name" {
-				decoded.ProfileOnly = false
-			}
-		}
+		// Match the update/builder predicates, not raw keys that may be ignored.
+		decoded.ProfileOnly = decoded.ReleaseChannelName == "" && decoded.CustomVersion == "" &&
+			decoded.AllowedTeams == nil && decoded.AllowedNamespaces == nil && decoded.AllowedClusters == nil &&
+			decoded.LogLevel == "" && decoded.DatabasePoolMax <= 0 && decoded.DatabasePoolIdleTimeoutMs <= 0
 	}
 	*r = UnleashConfigRequest(decoded)
 	return nil

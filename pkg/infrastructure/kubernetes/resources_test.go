@@ -41,7 +41,7 @@ func TestResourceProfilesOnlyOwnThreeResourceKeys(t *testing.T) {
 			cfg.ResourceProfile = profile
 			desired := BuildUnleashCRD(repoTestConfig(), cfg)
 			proxy := desired.Spec.ExtraContainers[0].DeepCopy()
-			MergeResourceOwnership(live, &desired, profile, true)
+			require.NoError(t, MergeResourceOwnership(live, &desired, profile, true))
 			assert.True(t, unleash.ResourcesMatchProfile(desired.Spec.Resources, profile))
 			assert.Equal(t, live.Spec.Resources.Limits[corev1.ResourceCPU], desired.Spec.Resources.Limits[corev1.ResourceCPU])
 			assert.Equal(t, live.Spec.Resources.Requests[corev1.ResourceEphemeralStorage], desired.Spec.Resources.Requests[corev1.ResourceEphemeralStorage])
@@ -58,7 +58,7 @@ func TestSidecarResourcesFollowNamesNotPositions(t *testing.T) {
 	live.Spec.ExtraContainers = append([]corev1.Container{{Name: "unknown", Image: "unmanaged"}}, live.Spec.ExtraContainers...)
 	desired := BuildUnleashCRD(repoTestConfig(), cfg)
 	desired.Spec.ExtraContainers = append(desired.Spec.ExtraContainers, corev1.Container{Name: "new", Image: "managed"})
-	MergeResourceOwnership(live, &desired, "", false)
+	require.NoError(t, MergeResourceOwnership(live, &desired, "", false))
 	require.Len(t, desired.Spec.ExtraContainers, 2, "unknown live sidecars must not be adopted")
 	assert.Equal(t, "sql-proxy", desired.Spec.ExtraContainers[0].Name)
 	assert.Equal(t, live.Spec.ExtraContainers[1].Resources, desired.Spec.ExtraContainers[0].Resources)
@@ -92,7 +92,7 @@ func TestProfileRepositoryWritesPreserveLiveTuningAndIntent(t *testing.T) {
 				after, err := repo.GetCRD(ctx, live.Name)
 				require.NoError(t, err)
 				want := BuildUnleashCRD(settings, &next)
-				MergeResourceOwnership(live, &want, cfg.ResourceProfile, enabled)
+				require.NoError(t, MergeResourceOwnership(live, &want, cfg.ResourceProfile, enabled))
 				assert.Equal(t, want.Spec, after.Spec)
 				intent, err := UnmarshalIntent(after.Annotations[AnnotationDesiredState])
 				require.NoError(t, err)
@@ -120,18 +120,83 @@ func TestProfileOnlyUpdatePreservesWholeSpecAndConflicts(t *testing.T) {
 	read, err := repo.GetCRD(ctx, live.Name)
 	require.NoError(t, err)
 	cfg.ResourceProfile = "medium"
-	require.NoError(t, repo.Update(ctx, cfg, unleash.UpdateOptions{ExpectedResourceVersion: read.ResourceVersion}))
+	require.NoError(t, repo.Update(ctx, cfg, unleash.UpdateOptions{ExpectedResourceVersion: read.ResourceVersion, ProfileOnly: true}))
 	after, err := repo.GetCRD(ctx, live.Name)
 	require.NoError(t, err)
 	want := live.DeepCopy()
-	MergeResourceOwnership(live, want, "medium", true)
+	require.NoError(t, MergeResourceOwnership(live, want, "medium", true))
 	assert.Equal(t, want.Spec, after.Spec, "only three resource keys may change")
+	require.NoError(t, repo.Update(ctx, cfg, unleash.UpdateOptions{ExpectedResourceVersion: after.ResourceVersion, ProfileOnly: true}))
+	reselected, err := repo.GetCRD(ctx, live.Name)
+	require.NoError(t, err)
+	assert.Equal(t, after.Spec, reselected.Spec, "explicit same-profile reselection must also preserve the full unrelated spec")
 	cfg.ResourceProfile = "large"
-	err = repo.Update(ctx, cfg, unleash.UpdateOptions{ExpectedResourceVersion: read.ResourceVersion})
+	err = repo.Update(ctx, cfg, unleash.UpdateOptions{ExpectedResourceVersion: read.ResourceVersion, ProfileOnly: true})
 	require.True(t, apierrors.IsConflict(err), "%v", err)
 	unchanged, err := repo.GetCRD(ctx, live.Name)
 	require.NoError(t, err)
-	assert.Equal(t, after, unchanged)
+	assert.Equal(t, reselected, unchanged)
+}
+
+func TestOrdinaryNoopUpdateStillRendersAndRefreshesPolicy(t *testing.T) {
+	ctx := context.Background()
+	live, cfg := tunedInstance(t)
+	live.Spec.ExtraContainers[0].Image = "proxy:old"
+	cfg.FederationNonce = ""
+	cfg.ResourceProfile = "small"
+	raw, err := MarshalIntent(cfg)
+	require.NoError(t, err)
+	live.Annotations[AnnotationDesiredState] = raw
+	policy := &fqdn.FQDNNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: live.Name + "-fqdn", Namespace: live.Namespace}}
+	c := fake.NewClientBuilder().WithScheme(repoTestScheme(t)).WithObjects(live, policy).Build()
+	settings := repoTestConfig()
+	settings.CloudConnectorProxy = "proxy:new"
+	repo := NewUnleashRepository(c, settings, logrus.New())
+	read, err := repo.GetCRD(ctx, live.Name)
+	require.NoError(t, err)
+	// Ordinary HTTP updates may carry the live nonce from readback.
+	cfg.FederationNonce = live.Spec.Federation.SecretNonce
+	require.NoError(t, repo.Update(ctx, cfg, unleash.UpdateOptions{ExpectedResourceVersion: read.ResourceVersion}))
+	after, err := repo.GetCRD(ctx, live.Name)
+	require.NoError(t, err)
+	assert.Equal(t, settings.CloudConnectorProxy, after.Spec.ExtraContainers[0].Image)
+	assert.Equal(t, live.Spec.ExtraContainers[0].Resources, after.Spec.ExtraContainers[0].Resources)
+	assert.Equal(t, live.Spec.Federation.SecretNonce, after.Spec.Federation.SecretNonce)
+	assert.Equal(t, raw, after.Annotations[AnnotationDesiredState], "ordinary writes must not adopt a readback nonce into intent")
+	updatedPolicy := &fqdn.FQDNNetworkPolicy{}
+	require.NoError(t, c.Get(ctx, ctrl.ObjectKeyFromObject(policy), updatedPolicy))
+	assert.NotEmpty(t, updatedPolicy.Spec.Egress, "an unchanged config still refreshes managed network policy")
+
+	before := after.DeepCopy()
+	cfg.LogLevel = "debug"
+	err = repo.Update(ctx, cfg, unleash.UpdateOptions{ProfileOnly: true})
+	require.Error(t, err, "profile-only option must reject other intent changes")
+	unchanged, err := repo.GetCRD(ctx, live.Name)
+	require.NoError(t, err)
+	assert.Equal(t, before, unchanged)
+}
+
+func TestProfileSelectionRejectsRetainedLimitsBeforeAnyWrite(t *testing.T) {
+	ctx := context.Background()
+	live, cfg := tunedInstance(t)
+	live.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("25m")
+	live.Spec.Resources.Limits[corev1.ResourceCPU] = resource.MustParse("50m")
+	c := fake.NewClientBuilder().WithScheme(repoTestScheme(t)).WithObjects(live).Build()
+	settings := repoTestConfig()
+	settings.Unleash.ResourceProfilesEnabled = true
+	repo := NewUnleashRepository(c, settings, logrus.New())
+	before, err := repo.GetCRD(ctx, live.Name)
+	require.NoError(t, err)
+	cfg.ResourceProfile = "medium"
+	for _, only := range []bool{false, true} {
+		require.ErrorIs(t, repo.Update(ctx, cfg, unleash.UpdateOptions{ProfileOnly: only}), unleash.ErrIncompatibleResources)
+		after, err := repo.GetCRD(ctx, live.Name)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		var policies fqdn.FQDNNetworkPolicyList
+		require.NoError(t, c.List(ctx, &policies))
+		assert.Empty(t, policies.Items, "even general updates must validate before network-policy writes")
+	}
 }
 
 func TestIntentProfileCompatibilityAndBytes(t *testing.T) {
