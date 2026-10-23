@@ -84,6 +84,16 @@ values:
     config:
       type: bool
 
+  backend.unleash.resourceProfilesEnabled:
+    displayName: Enable Unleash resource profile selection and enforcement
+    description: >-
+      Off by default. Enable per environment only after capacity review and dev-nais
+      validation. Disabling preserves persisted profiles and live resources while
+      stopping new selections and resource enforcement; keep the compatibility build.
+    computed:
+      template: 'false'
+    config:
+      type: bool
   backend.unleash.apiIngressClass:
     displayName: Api Ingress Class
     computed:

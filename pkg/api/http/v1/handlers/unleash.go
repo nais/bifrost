@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/nais/bifrost/pkg/config"
 	"github.com/nais/bifrost/pkg/domain/releasechannel"
 	domainunleash "github.com/nais/bifrost/pkg/domain/unleash"
+	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -67,7 +69,11 @@ func (h *UnleashHandler) ListInstances(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, crds)
+	responses := make([]*dto.UnleashResponse, len(crds))
+	for i := range crds {
+		responses[i] = dto.ToCRDResponse(&crds[i])
+	}
+	c.JSON(http.StatusOK, responses)
 }
 
 // GetInstance godoc
@@ -96,7 +102,7 @@ func (h *UnleashHandler) GetInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, crd)
+	c.JSON(http.StatusOK, dto.ToCRDResponse(crd))
 }
 
 // CreateInstance godoc
@@ -127,6 +133,10 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 	}
 
 	// Enable federation by default for new instances
+	if req.ResourceProfile != nil && !h.config.Unleash.ResourceProfilesEnabled {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "resource_profiles_disabled", Message: "Resource profile selection is disabled", StatusCode: http.StatusBadRequest})
+		return
+	}
 	req.EnableFederation = true
 
 	builder := req.ToConfigBuilder()
@@ -198,7 +208,7 @@ func (h *UnleashHandler) CreateInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, crd)
+	c.JSON(http.StatusCreated, dto.ToCRDResponse(crd))
 }
 
 // UpdateInstance godoc
@@ -233,6 +243,10 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	}
 
 	req.Name = name
+	if req.ResourceProfile != nil && !h.config.Unleash.ResourceProfilesEnabled {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "resource_profiles_disabled", Message: "Resource profile selection is disabled", StatusCode: http.StatusBadRequest})
+		return
+	}
 
 	// Get existing instance to validate changes and preserve version source if not specified
 	existing, err := h.service.Get(ctx, name)
@@ -317,6 +331,29 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	builder.SetAllowedTeams(*desiredTeams)
 
 	config, err := builder.Build()
+	if err == nil && req.ResourceProfile != nil {
+		live, readErr := h.service.GetCRD(ctx, name)
+		if readErr != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "read_failed", StatusCode: http.StatusInternalServerError})
+			return
+		}
+		var recorded *domainunleash.Config
+		recorded, err = kubernetes.UnmarshalIntent(live.GetAnnotations()[kubernetes.AnnotationDesiredState])
+		if err == nil {
+			err = recorded.Validate()
+		}
+		if err == nil && recorded.Name != name {
+			err = fmt.Errorf("desired-state name does not match instance")
+		}
+		if err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "recorded_intent_required", Message: "Resource profile selection requires valid recorded desired-state intent", StatusCode: http.StatusBadRequest})
+			return
+		}
+		if req.ProfileOnly {
+			config = recorded
+			config.ResourceProfile = *req.ResourceProfile
+		}
+	}
 	if err != nil {
 		h.logger.WithContext(ctx).WithError(err).WithField("name", name).Error("Validation failed")
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -347,8 +384,13 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	// in between is overwritten by preserved values that are already stale.
 	crd, err := h.service.Update(ctx, config, domainunleash.UpdateOptions{
 		ExpectedResourceVersion: existing.ResourceVersion,
+		ProfileOnly:             req.ProfileOnly,
 	})
 	if err != nil {
+		if errors.Is(err, domainunleash.ErrIncompatibleResources) {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "incompatible_resources", Message: err.Error(), StatusCode: http.StatusBadRequest})
+			return
+		}
 		// A conflict means somebody else wrote first, so the request is not
 		// wrong and the server is not broken: the caller has to re-read and
 		// decide again. Reporting it as a 500 hides a retryable outcome.
@@ -369,7 +411,7 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, crd)
+	c.JSON(http.StatusOK, dto.ToCRDResponse(crd))
 }
 
 // DeleteInstance godoc

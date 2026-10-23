@@ -195,7 +195,10 @@ func (r *UnleashReconciler) legacyAdoptionTarget(crd *unleashv1.Unleash) (*unlea
 		return nil, fmt.Errorf("derive Bifrost configuration from legacy CR: %w", err)
 	}
 	cfg.FederationNonce = crd.Spec.Federation.SecretNonce
-	target := kubernetes.BuildUnleashCRD(r.config, cfg)
+	target := kubernetes.BuildUnleashUpdateCRD(r.config, cfg, crd)
+	if err := kubernetes.MergeResourceOwnership(crd, &target, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled); err != nil {
+		return nil, err
+	}
 	return &target, nil
 }
 

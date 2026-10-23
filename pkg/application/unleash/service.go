@@ -127,6 +127,12 @@ func (s *Service) GetCRD(ctx context.Context, name string) (*unleashv1.Unleash, 
 // CRD behind. Rollback runs on a detached, bounded context so it completes even
 // if the request context was cancelled.
 func (s *Service) Create(ctx context.Context, config *unleash.Config) (crd *unleashv1.Unleash, err error) {
+	if config.ResourceProfile != "" && !unleash.ValidResourceProfile(config.ResourceProfile) {
+		return nil, errors.New("invalid resource profile")
+	}
+	if config.ResourceProfile != "" && !s.config.Unleash.ResourceProfilesEnabled {
+		return nil, errors.New("resource profile selection is disabled")
+	}
 	name := config.Name
 
 	// Serialize with any other lifecycle operation on this name. Two concurrent

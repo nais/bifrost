@@ -96,6 +96,7 @@ type GoogleConfig struct {
 }
 
 type UnleashConfig struct {
+	ResourceProfilesEnabled     bool   `env:"BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED,default=false"`
 	InstanceNamespace           string `env:"BIFROST_UNLEASH_INSTANCE_NAMESPACE,required"`
 	InstanceServiceaccount      string `env:"BIFROST_UNLEASH_INSTANCE_SERVICEACCOUNT,required"`
 	SQLInstanceID               string `env:"BIFROST_UNLEASH_SQL_INSTANCE_ID,required"`

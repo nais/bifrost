@@ -71,6 +71,65 @@ GET    /v1/releasechannels/:name      - Get channel details
 }
 ```
 
+### Resource profiles (activation gated)
+
+`resource_profile` accepts `small`, `medium`, or `large` on create/update.
+Omission preserves selection; empty/null and unknown values are rejected.
+Responses retain the existing CRD shape and add
+`resource_profile`, `resource_profile_explicit`, `resource_profile_matches`, and
+`resolved_resources` (actual live container resources).
+
+| Profile | CPU request | Memory request | Memory limit |
+| --- | --- | --- | --- |
+| small | 100m | 128Mi | 256Mi |
+| medium | 100m | 256Mi | 512Mi |
+| large | 100m | 512Mi | 1Gi |
+
+The table is provisional, **not capacity approval**. Selection and enforcement
+default off (`BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED=false`).
+Set `backend.unleash.resourceProfilesEnabled` in Helm/Fasit for the selected
+environment (default `false`; set back to `false` to disable safely).
+Merging ships through ci-nais and tenant fan-out, with no manual hold before dev-nais.
+nais/api and Console selection are separate integration work (see #641/#640).
+
+Absent selection displays inherited small without acquiring resource ownership.
+Explicit selection on existing instances requires valid recorded desired-state
+intent; it never adopts an unannotated instance. Legacy adoption remains separate.
+Live tuning, CPU limits, extra resource keys, replicas and sidecar resources survive
+unrelated writes. Other managed sidecar fields (image, args and security settings)
+still reconcile; unknown live sidecars follow the rendered spec. Profile-only writes
+preserve the entire live spec apart from the selected Unleash resource keys.
+New instances retain the historical small defaults and no CPU
+limit, persisting explicit small intent even when selection is disabled.
+Explicit selection owns only CPU request and memory request/limit.
+It may roll out the Deployment; downsizing is not safe merely because an
+instantaneous memory reading is low.
+
+Rollout is blocked pending the evidence in [#647](https://github.com/nais/bifrost/issues/647#issuecomment-6364771461):
+
+1. **Before merging the compatibility build**, verify deployed revisions/settings
+   and census raw intent schemas and field names, without printing intent payloads
+   or nonces. Unknown fields fail closed even with the flag false. Establish
+   compatibility evidence before the automatic canary/fan-out, not at a later dev-nais hold.
+2. Before enabling, inventory **all** persisted explicit profiles and actual
+   resources, including default small on new creates. Enabling can enforce every
+   mismatch and roll out instances, not just those selected through a UI. Approve
+   aggregate request reservations against capacity and measured demand.
+3. Quiesce in-flight version/channel transactions and competing autoscalers.
+   Disabling new migration admission alone does not stop existing transactions.
+4. Confirm the connected tenant interactively, then validate one tenant on dev-nais
+   first, not nav. Do not automate tenant switching or JITA. Real-kind tests prove
+   Bifrost HTTP/CRD/reconciler behavior, not Unleasherator Deployment Pod templates;
+   controller evidence is still required. Disabled `in_sync` is not profile compliance.
+5. To disable, set the Helm/Fasit flag false and retain this compatible build.
+   Existing intent/resources remain; new selection and enforcement stop. This
+   neither undoes a rollout nor permits a general binary rollback. The **first
+   create writes schema 2 even with the flag false**, so pre-schema-2 code is not
+   a safe revert. Do not rewrite fleet intents or resize back to small as rollback.
+
+Deployed configurations, census, capacity and upstream Pod-template behavior remain
+unverified; this plan is not rollout approval.
+
 ### Instance Response
 
 ```json

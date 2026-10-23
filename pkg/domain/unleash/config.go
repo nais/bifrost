@@ -52,6 +52,7 @@ type Config struct {
 	LogLevel                  string `json:"LogLevel"`
 	DatabasePoolMax           int    `json:"DatabasePoolMax"`
 	DatabasePoolIdleTimeoutMs int    `json:"DatabasePoolIdleTimeoutMs"`
+	ResourceProfile           string `json:"ResourceProfile,omitempty"`
 }
 
 // ConfigBuilder provides a builder pattern for creating Config instances
@@ -106,6 +107,11 @@ func (b *ConfigBuilder) WithFederation(nonce, teams, namespaces, clusters string
 // WithLogLevel sets the log level
 func (b *ConfigBuilder) WithLogLevel(level string) *ConfigBuilder {
 	b.config.LogLevel = level
+	return b
+}
+
+func (b *ConfigBuilder) WithResourceProfile(profile string) *ConfigBuilder {
+	b.config.ResourceProfile = profile
 	return b
 }
 
@@ -180,6 +186,9 @@ func (b *ConfigBuilder) Build() (*Config, error) {
 // authoritative, so an unvalidated one is rendered verbatim onto a live
 // instance.
 func (c *Config) Validate() error {
+	if c.ResourceProfile != "" && !ValidResourceProfile(c.ResourceProfile) {
+		return errors.New("resource_profile must be small, medium or large")
+	}
 	// Validate mutual exclusivity
 	if c.CustomVersion != "" && c.ReleaseChannelName != "" {
 		return ErrBothVersionSourcesSet
@@ -243,6 +252,7 @@ func splitNoEmpty(s, sep string) []string {
 func LoadFromExisting(instance *Instance) *ConfigBuilder {
 	return &ConfigBuilder{
 		config: &Config{
+			ResourceProfile:           instance.ResourceProfile,
 			Name:                      instance.Name,
 			CustomVersion:             instance.CustomVersion,
 			ReleaseChannelName:        instance.ReleaseChannelName,

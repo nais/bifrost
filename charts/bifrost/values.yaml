@@ -55,6 +55,9 @@ backend:
     resyncInterval: "10m"
 
   unleash:
+    # Enable per environment only after capacity review and dev-nais validation.
+    resourceProfilesEnabled: false
+
     # Kubernetes namespace to create unleash instances in
     # instanceNamespace:  # mapped in fasit
 

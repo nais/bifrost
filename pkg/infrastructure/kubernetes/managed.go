@@ -3,6 +3,8 @@ package kubernetes
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/nais/bifrost/pkg/domain/unleash"
 	unleashv1 "github.com/nais/unleasherator/api/v1"
@@ -32,21 +34,9 @@ const (
 	AnnotationAdoption = "bifrost.nais.io/adoption"
 )
 
-// IntentSchemaVersion is the schema the desired-state annotation is written
-// under, and the only one this build will read back.
-//
-// UnmarshalIntent is a plain json.Unmarshal, which is silent in both
-// directions: a field added to unleash.Config since an annotation was written
-// comes back as its zero value, and a renamed one is dropped as unknown and
-// zero-filled as missing. Because the annotation is authoritative, the
-// reconciler would then render those zero values onto every live instance still
-// carrying an old annotation — a fleet-wide rewrite that looks exactly like an
-// ordinary converge. The version turns that into a refusal.
-//
-// Bump it in the same commit as any change to unleash.Config's fields — add,
-// remove, rename, or retype. TestIntentSchemaVersionPinsConfigFields fails
-// until you do.
-const IntentSchemaVersion = 1
+// IntentSchemaVersion adds explicit resource ownership. Readers also accept v0
+// and v1, whose absent profile must not acquire that ownership.
+const IntentSchemaVersion = 2
 
 // intentEnvelope is the on-annotation shape: the config's own fields with the
 // schema version alongside them. Config is embedded rather than nested so the
@@ -60,7 +50,12 @@ type intentEnvelope struct {
 // MarshalIntent serializes a per-instance config, stamped with the current
 // schema version, for storage in the desired-state annotation.
 func MarshalIntent(cfg *unleash.Config) (string, error) {
-	b, err := json.Marshal(intentEnvelope{SchemaVersion: IntentSchemaVersion, Config: *cfg})
+	version := IntentSchemaVersion
+	if cfg.ResourceProfile == "" {
+		// Keep legacy migration transaction hashes byte-compatible.
+		version = 1
+	}
+	b, err := json.Marshal(intentEnvelope{SchemaVersion: version, Config: *cfg})
 	if err != nil {
 		return "", err
 	}
@@ -77,21 +72,33 @@ func MarshalIntent(cfg *unleash.Config) (string, error) {
 // validates and would be applied verbatim.
 func UnmarshalIntent(s string) (*unleash.Config, error) {
 	envelope := intentEnvelope{}
-	if err := json.Unmarshal([]byte(s), &envelope); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(s))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
 		return nil, err
 	}
 
 	version := envelope.SchemaVersion
-	if version == 0 {
-		// Written before the version field existed. Those annotations are
-		// field-for-field what version 1 writes, so reading them as 1 is exact
-		// rather than a guess — and it is deliberately not a blanket exemption:
-		// once the schema moves past 1 they are refused along with every other
-		// version-1 annotation.
-		version = 1
-	}
-	if version != IntentSchemaVersion {
+	if version != 0 && version != 1 && version != 2 {
 		return nil, fmt.Errorf("desired-state annotation has schema version %d, this build reads %d", version, IntentSchemaVersion)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &fields); err != nil || fields == nil {
+		return nil, fmt.Errorf("desired-state annotation must be an object")
+	}
+	if raw, present := fields["schemaVersion"]; present && string(raw) == "null" {
+		return nil, fmt.Errorf("desired-state schema version must be an integer")
+	}
+	for key := range fields {
+		if (strings.EqualFold(key, "ResourceProfile") && key != "ResourceProfile") ||
+			(strings.EqualFold(key, "schemaVersion") && key != "schemaVersion") {
+			return nil, fmt.Errorf("noncanonical desired-state field %q", key)
+		}
+	}
+	if _, present := fields["ResourceProfile"]; present {
+		if version != 2 || !unleash.ValidResourceProfile(envelope.ResourceProfile) {
+			return nil, fmt.Errorf("invalid resource profile in desired-state schema %d", version)
+		}
 	}
 
 	cfg := envelope.Config
@@ -115,11 +122,24 @@ func ApplyManagedMetadata(live, rendered *unleashv1.Unleash) {
 	// Absent only when marshaling the intent failed; keeping whatever the live
 	// object already carries beats replacing it with nothing.
 	if intent := rendered.GetAnnotations()[AnnotationDesiredState]; intent != "" {
+		if IntentEqual(live.GetAnnotations()[AnnotationDesiredState], intent) {
+			return
+		}
 		if live.Annotations == nil {
 			live.Annotations = map[string]string{}
 		}
 		live.Annotations[AnnotationDesiredState] = intent
 	}
+}
+
+// IntentEqual ignores serialization and schema stamping, not configuration.
+func IntentEqual(a, b string) bool {
+	left, err := UnmarshalIntent(a)
+	if err != nil {
+		return false
+	}
+	right, err := UnmarshalIntent(b)
+	return err == nil && reflect.DeepEqual(left, right)
 }
 
 // stampManagedMetadata sets the managed-by label and desired-state annotation on

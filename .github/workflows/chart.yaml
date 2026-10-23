@@ -61,20 +61,17 @@ jobs:
         run: ct lint --config ct.yaml --target-branch ${{ github.event.repository.default_branch }}
 
       - name: Set up Go
-        if: steps.list-changed.outputs.changed == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # ratchet:actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: Create kind cluster
-        if: steps.list-changed.outputs.changed == 'true'
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # ratchet:helm/kind-action@v1.15.0
         with:
           cluster_name: ${{ env.KIND_CLUSTER }}
 
       - name: Build and load image into kind
-        if: steps.list-changed.outputs.changed == 'true'
         run: |
           docker build -t "${IMAGE}" .
           kind load docker-image "${IMAGE}" --name "${KIND_CLUSTER}"
@@ -84,7 +81,6 @@ jobs:
           kind load docker-image "${TEST_IMAGE}" --name "${KIND_CLUSTER}"
 
       - name: Install cluster prerequisites
-        if: steps.list-changed.outputs.changed == 'true'
         run: |
           # ServiceMonitor and PrometheusRule. Without these the chart's
           # monitoring resources are rejected by the API server, which is a
@@ -103,7 +99,6 @@ jobs:
           kubectl create namespace "${TEST_NAMESPACE}"
 
       - name: Run chart-testing (install)
-        if: steps.list-changed.outputs.changed == 'true'
         run: |
           ct install \
             --config ct.yaml \
@@ -111,9 +106,42 @@ jobs:
             --target-branch ${{ github.event.repository.default_branch }} \
             --namespace "${TEST_NAMESPACE}"
 
+      - name: Test deployed resource profile lifecycle (enabled and disabled)
+        env:
+          BIFROST_KIND_E2E: "1"
+          BIFROST_E2E_NAMESPACE: bifrost-profile-e2e
+          BIFROST_E2E_URL: http://127.0.0.1:18080
+        run: |
+          test "$(kubectl config current-context)" = kind-chart-testing
+          umask 077
+          kubectl config view --raw --minify > "${RUNNER_TEMP}/bifrost-kind-kubeconfig"
+          export KUBECONFIG="${RUNNER_TEMP}/bifrost-kind-kubeconfig"
+          kubectl create namespace bifrost-profile-e2e-system
+          for enabled in true false; do
+            helm upgrade --install bifrost-profile-e2e ./charts/bifrost \
+              --namespace bifrost-profile-e2e-system \
+              -f charts/bifrost/ci/gcp-values.yaml \
+              --set backend.unleash.instanceNamespace=bifrost-profile-e2e \
+              --set backend.unleash.resourceProfilesEnabled="${enabled}" \
+              --set backend.reconciler.dryRun=false \
+              --set backend.reconciler.resyncInterval=1s \
+              --wait --timeout 600s
+            export BIFROST_E2E_API_KEY="$(kubectl -n bifrost-profile-e2e-system get secret bifrost-api-key -o jsonpath='{.data.api-keys}' | base64 -d)"
+            export BIFROST_E2E_ENABLED="${enabled}"
+            kubectl -n bifrost-profile-e2e-system port-forward deployment/bifrost-profile-e2e-backend 18080:8080 > "${RUNNER_TEMP}/bifrost-profile-portforward.log" 2>&1 &
+            forward_pid=$!
+            trap 'kill "${forward_pid}" 2>/dev/null || true' EXIT
+            # Same command as mise run test-e2e; this chart job provisions Go directly.
+            go test -tags=kind_e2e -count=1 -timeout=3m ./tests/e2e
+            kill "${forward_pid}"
+            wait "${forward_pid}" || true
+            trap - EXIT
+          done
+
       - name: Dump diagnostics on failure
-        if: failure() && steps.list-changed.outputs.changed == 'true'
+        if: failure()
         run: |
           kubectl get pods -A -o wide || true
           kubectl -n "${TEST_NAMESPACE}" describe pods || true
           kubectl -n "${TEST_NAMESPACE}" logs -l app=bifrost --tail=200 --prefix || true
+          kubectl -n bifrost-profile-e2e-system logs -l app=bifrost --tail=200 --prefix || true
