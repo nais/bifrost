@@ -35,7 +35,7 @@ func TestMarshalIntent_StampsSchemaVersion(t *testing.T) {
 
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(intent), &raw))
-	assert.EqualValues(t, IntentSchemaVersion, raw["schemaVersion"], "the annotation must record its schema")
+	assert.EqualValues(t, 1, raw["schemaVersion"], "unselected intent keeps legacy transaction hashes")
 
 	// The config's own fields stay at the top level, under the names they have
 	// always used, so the payload is still readable by anything that knew the
@@ -72,8 +72,8 @@ func TestUnmarshalIntent_RefusesUnrecognisedSchemaVersions(t *testing.T) {
 			// Two bifrost versions overlap on every rolling deploy, so the new
 			// pod's annotations really do land in front of the old pod's reader.
 			name:       "a newer schema than this build knows",
-			annotation: `{"schemaVersion":2,"Name":"team-a","LogLevel":"warn","DatabasePoolMax":3}`,
-			wantErr:    "schema version 2",
+			annotation: `{"schemaVersion":3,"Name":"team-a","LogLevel":"warn","DatabasePoolMax":3}`,
+			wantErr:    "schema version 3",
 		},
 		{
 			name:       "a schema this build has never heard of",
@@ -111,9 +111,9 @@ func TestUnmarshalIntent_RefusesAnnotationMissingAFieldThisSchemaExpects(t *test
 	assert.Zero(t, readable.DatabasePoolMax,
 		"under a schema this build reads, a missing field is silently zero — which is exactly why the version has to be checked")
 
-	_, err = UnmarshalIntent(`{"schemaVersion":2,` + missingPoolMax + `}`)
+	_, err = UnmarshalIntent(`{"schemaVersion":3,` + missingPoolMax + `}`)
 	require.Error(t, err, "a foreign schema must be refused before its fields are believed")
-	assert.Contains(t, err.Error(), "schema version 2")
+	assert.Contains(t, err.Error(), "schema version 3")
 }
 
 // The version is only worth anything if it moves when the schema does. Adding,
@@ -140,6 +140,7 @@ func TestIntentSchemaVersionPinsConfigFields(t *testing.T) {
 		"DatabasePoolMax int `json:\"DatabasePoolMax\"`",
 		"DatabasePoolIdleTimeoutMs int `json:\"DatabasePoolIdleTimeoutMs\"`",
 	}}
+	fieldsByVersion[2] = append(append([]string{}, fieldsByVersion[1]...), "ResourceProfile string `json:\"ResourceProfile,omitempty\"`")
 
 	want, ok := fieldsByVersion[IntentSchemaVersion]
 	require.True(t, ok,
@@ -168,10 +169,6 @@ func TestIntentSchemaVersionPinsConfigFields(t *testing.T) {
 // is no way to satisfy this by editing a list: either bump the version, or
 // change what schema 1 has always meant, and the latter is visible in review.
 func TestSchemaOneAnnotationStillFillsEveryField(t *testing.T) {
-	if IntentSchemaVersion != 1 {
-		t.Skipf("frozen payload describes schema 1, build reads %d — freeze one for the new version too", IntentSchemaVersion)
-	}
-
 	const frozenSchemaOne = `{"schemaVersion":1,` +
 		`"Name":"team-a",` +
 		`"CustomVersion":"v5.1.2",` +
@@ -191,6 +188,10 @@ func TestSchemaOneAnnotationStillFillsEveryField(t *testing.T) {
 	v := reflect.ValueOf(*cfg)
 	typ := v.Type()
 	for i := range typ.NumField() {
+		if typ.Field(i).Name == "ResourceProfile" {
+			assert.True(t, v.Field(i).IsZero(), "legacy intent must not acquire resource ownership")
+			continue
+		}
 		assert.Falsef(t, v.Field(i).IsZero(),
 			"%s is zero after reading a schema-1 annotation: the field is not in schema 1, so every existing "+
 				"annotation zero-fills it and the reconciler renders that zero onto live instances — bump IntentSchemaVersion",

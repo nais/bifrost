@@ -71,6 +71,41 @@ GET    /v1/releasechannels/:name      - Get channel details
 }
 ```
 
+### Resource profiles (activation gated)
+
+`resource_profile` accepts `small`, `medium`, or `large` on create/update.
+Omission preserves selection; empty/null and unknown values are rejected.
+Responses retain the existing CRD shape and add
+`resource_profile`, `resource_profile_explicit`, `resource_profile_matches`, and
+`resolved_resources` (actual live container resources).
+
+| Profile | CPU request | Memory request | Memory limit |
+| --- | --- | --- | --- |
+| small | 100m | 128Mi | 256Mi |
+| medium | 100m | 256Mi | 512Mi |
+| large | 100m | 512Mi | 1Gi |
+
+The table is provisional, **not capacity approval**. Selection and enforcement
+default off (`BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED=false`). Review aggregate
+reservations and measured demand before activation, then validate on dev-nais,
+not nav. Verify the deployed revision and reconciler settings separately.
+Merging ships through ci-nais and tenant fan-out; it does not resize the fleet.
+nais/api and Console selection are separate integration work (see #641/#640).
+
+Absent selection displays inherited small without acquiring resource ownership.
+Live tuning, CPU limits, extra resource keys, replicas and sidecars survive
+unrelated writes. New instances retain the historical small defaults and no CPU
+limit, persisting explicit small intent even when selection is disabled.
+Explicit selection owns only CPU request and memory request/limit.
+It may roll out the Deployment; downsizing is not safe merely because an
+instantaneous memory reading is low.
+
+To disable safely, keep this compatibility build and set the flag false: existing
+profile intents remain readable, lifecycle/version changes keep live resources,
+and new selections and resource enforcement stop. Do **not** revert to a build
+that cannot read schema 2 or lacks ownership-aware writes, and do not rewrite
+fleet intents. Disabling does not resize instances back to small.
+
 ### Instance Response
 
 ```json

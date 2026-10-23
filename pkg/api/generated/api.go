@@ -19,6 +19,27 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for UnleashResourceProfile.
+const (
+	UnleashResourceProfileLarge  UnleashResourceProfile = "large"
+	UnleashResourceProfileMedium UnleashResourceProfile = "medium"
+	UnleashResourceProfileSmall  UnleashResourceProfile = "small"
+)
+
+// Valid indicates whether the value is a known member of the UnleashResourceProfile enum.
+func (e UnleashResourceProfile) Valid() bool {
+	switch e {
+	case UnleashResourceProfileLarge:
+		return true
+	case UnleashResourceProfileMedium:
+		return true
+	case UnleashResourceProfileSmall:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UnleashConfigRequestLogLevel.
 const (
 	Debug UnleashConfigRequestLogLevel = "debug"
@@ -40,6 +61,27 @@ func (e UnleashConfigRequestLogLevel) Valid() bool {
 	case Info:
 		return true
 	case Warn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UnleashConfigRequestResourceProfile.
+const (
+	UnleashConfigRequestResourceProfileLarge  UnleashConfigRequestResourceProfile = "large"
+	UnleashConfigRequestResourceProfileMedium UnleashConfigRequestResourceProfile = "medium"
+	UnleashConfigRequestResourceProfileSmall  UnleashConfigRequestResourceProfile = "small"
+)
+
+// Valid indicates whether the value is a known member of the UnleashConfigRequestResourceProfile enum.
+func (e UnleashConfigRequestResourceProfile) Valid() bool {
+	switch e {
+	case UnleashConfigRequestResourceProfileLarge:
+		return true
+	case UnleashConfigRequestResourceProfileMedium:
+		return true
+	case UnleashConfigRequestResourceProfileSmall:
 		return true
 	default:
 		return false
@@ -95,6 +137,12 @@ type ReleaseChannelResponse struct {
 	Version *string `json:"version,omitempty"`
 }
 
+// ResolvedResources Actual live Unleash container resources, not a claim that inherited small is enforced.
+type ResolvedResources struct {
+	Limits   *map[string]string `json:"limits,omitempty"`
+	Requests *map[string]string `json:"requests,omitempty"`
+}
+
 // Unleash Unleash CRD (Custom Resource Definition) representing an Unleash feature flag server instance.
 // This is a Kubernetes resource managed by the unleasherator operator.
 type Unleash struct {
@@ -105,6 +153,18 @@ type Unleash struct {
 		Name              *string    `json:"name,omitempty"`
 		Namespace         *string    `json:"namespace,omitempty"`
 	} `json:"metadata,omitempty"`
+
+	// ResolvedResources Actual live Unleash container resources, not a claim that inherited small is enforced.
+	ResolvedResources *ResolvedResources `json:"resolved_resources,omitempty"`
+
+	// ResourceProfile Selected profile, or inherited small. Inheritance does not claim ownership of live resources.
+	ResourceProfile *UnleashResourceProfile `json:"resource_profile,omitempty"`
+
+	// ResourceProfileExplicit Whether resource ownership was explicitly selected in desired intent.
+	ResourceProfileExplicit *bool `json:"resource_profile_explicit,omitempty"`
+
+	// ResourceProfileMatches Whether live CPU request and memory request/limit match the profile mapping. Other resource keys and CPU limits remain live-owned.
+	ResourceProfileMatches *bool `json:"resource_profile_matches,omitempty"`
 
 	// Spec Desired state of the Unleash instance
 	Spec *struct {
@@ -135,6 +195,9 @@ type Unleash struct {
 	} `json:"status,omitempty"`
 }
 
+// UnleashResourceProfile Selected profile, or inherited small. Inheritance does not claim ownership of live resources.
+type UnleashResourceProfile string
+
 // UnleashConfigRequest Request body for creating or updating an Unleash instance
 type UnleashConfigRequest struct {
 	// AllowedClusters Comma-separated list of allowed clusters for federation
@@ -160,10 +223,16 @@ type UnleashConfigRequest struct {
 
 	// ReleaseChannelName Name of the release channel to use for automatic version updates
 	ReleaseChannelName *string `json:"release_channel_name,omitempty"`
+
+	// ResourceProfile Explicit resource selection. Omission preserves existing ownership; empty and null are rejected. Selection requires BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED. Changing resources may roll out the Deployment.
+	ResourceProfile *UnleashConfigRequestResourceProfile `json:"resource_profile,omitempty"`
 }
 
 // UnleashConfigRequestLogLevel Log level for the Unleash instance
 type UnleashConfigRequestLogLevel string
+
+// UnleashConfigRequestResourceProfile Explicit resource selection. Omission preserves existing ownership; empty and null are rejected. Selection requires BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED. Changing resources may roll out the Deployment.
+type UnleashConfigRequestResourceProfile string
 
 // CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
 type CreateInstanceJSONRequestBody = UnleashConfigRequest
@@ -385,45 +454,51 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"AAD//w==",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

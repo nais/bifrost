@@ -1,15 +1,23 @@
 package dto
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/nais/bifrost/pkg/domain/unleash"
+	"github.com/nais/bifrost/pkg/infrastructure/kubernetes"
+	unleashv1 "github.com/nais/unleasherator/api/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // UnleashConfigRequest represents the JSON request body for creating/updating an Unleash instance
 type UnleashConfigRequest struct {
-	Name               string `json:"name,omitempty"`
-	ReleaseChannelName string `json:"release_channel_name,omitempty"`
-	EnableFederation   bool   `json:"enable_federation,omitempty"`
-	FederationNonce    string `json:"-"` // Internal use only, not exposed in API
+	ResourceProfile    *string `json:"resource_profile,omitempty"`
+	ProfileOnly        bool    `json:"-"`
+	Name               string  `json:"name,omitempty"`
+	ReleaseChannelName string  `json:"release_channel_name,omitempty"`
+	EnableFederation   bool    `json:"enable_federation,omitempty"`
+	FederationNonce    string  `json:"-"` // Internal use only, not exposed in API
 	// AllowedTeams is a pointer so that a supplied-but-empty list (revoking the
 	// last team) is distinguishable from an omitted field (no statement about
 	// access). A plain string collapses the two and makes the list un-emptiable.
@@ -25,17 +33,72 @@ type UnleashConfigRequest struct {
 	DatabasePoolIdleTimeoutMs int     `json:"database_pool_idle_timeout_ms,omitempty"`
 }
 
+func (r *UnleashConfigRequest) UnmarshalJSON(data []byte) error {
+	type request UnleashConfigRequest
+	var decoded request
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, present := fields["resource_profile"]; present {
+		if decoded.ResourceProfile == nil || !unleash.ValidResourceProfile(*decoded.ResourceProfile) {
+			return fmt.Errorf("resource_profile must be small, medium or large, not empty or null")
+		}
+		decoded.ProfileOnly = true
+		for key := range fields {
+			if key != "resource_profile" && key != "name" {
+				decoded.ProfileOnly = false
+			}
+		}
+	}
+	*r = UnleashConfigRequest(decoded)
+	return nil
+}
+
+// UnleashResponse preserves the CRD response shape used by existing clients.
+type UnleashResponse struct {
+	*unleashv1.Unleash
+	ResourceProfile         string                      `json:"resource_profile"`
+	ResourceProfileExplicit bool                        `json:"resource_profile_explicit"`
+	ResourceProfileMatches  bool                        `json:"resource_profile_matches"`
+	ResolvedResources       corev1.ResourceRequirements `json:"resolved_resources"`
+}
+
+func ToCRDResponse(crd *unleashv1.Unleash) *UnleashResponse {
+	if crd == nil {
+		return nil
+	}
+	profile := ""
+	if cfg, err := kubernetes.UnmarshalIntent(crd.GetAnnotations()[kubernetes.AnnotationDesiredState]); err == nil {
+		profile = cfg.ResourceProfile
+	}
+	return &UnleashResponse{
+		Unleash:                 crd,
+		ResourceProfile:         unleash.EffectiveResourceProfile(profile),
+		ResourceProfileExplicit: profile != "",
+		ResourceProfileMatches:  unleash.ResourcesMatchProfile(crd.Spec.Resources, profile),
+		ResolvedResources:       *crd.Spec.Resources.DeepCopy(),
+	}
+}
+
 // UnleashInstanceResponse represents the JSON response for an Unleash instance
 type UnleashInstanceResponse struct {
-	Name        string `json:"name"`
-	Namespace   string `json:"namespace"`
-	CreatedAt   string `json:"created_at"`
-	Age         string `json:"age"`
-	Version     string `json:"version"`
-	Status      string `json:"status"`
-	StatusLabel string `json:"status_label"`
-	APIUrl      string `json:"api_url"`
-	WebUrl      string `json:"web_url"`
+	ResourceProfile         string                      `json:"resource_profile"`
+	ResourceProfileExplicit bool                        `json:"resource_profile_explicit"`
+	ResourceProfileMatches  bool                        `json:"resource_profile_matches"`
+	ResolvedResources       corev1.ResourceRequirements `json:"resolved_resources"`
+	Name                    string                      `json:"name"`
+	Namespace               string                      `json:"namespace"`
+	CreatedAt               string                      `json:"created_at"`
+	Age                     string                      `json:"age"`
+	Version                 string                      `json:"version"`
+	Status                  string                      `json:"status"`
+	StatusLabel             string                      `json:"status_label"`
+	APIUrl                  string                      `json:"api_url"`
+	WebUrl                  string                      `json:"web_url"`
 
 	// Version source
 	VersionSource      string `json:"version_source,omitempty"`
@@ -57,6 +120,9 @@ type UnleashListResponse struct {
 func (r *UnleashConfigRequest) ToConfigBuilder() *unleash.ConfigBuilder {
 	builder := unleash.NewConfigBuilder().
 		WithName(r.Name)
+	if r.ResourceProfile != nil {
+		builder.WithResourceProfile(*r.ResourceProfile)
+	}
 
 	if r.LogLevel != "" {
 		builder.WithLogLevel(r.LogLevel)
@@ -93,20 +159,24 @@ func derefString(s *string) string {
 // ToInstanceResponse converts an Instance to API response
 func ToInstanceResponse(instance *unleash.Instance) *UnleashInstanceResponse {
 	return &UnleashInstanceResponse{
-		Name:                  instance.Name,
-		Namespace:             instance.Namespace,
-		CreatedAt:             instance.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Age:                   instance.Age(),
-		Version:               instance.Version,
-		Status:                instance.Status(),
-		StatusLabel:           instance.StatusLabel(),
-		APIUrl:                instance.APIUrl,
-		WebUrl:                instance.WebUrl,
-		VersionSource:         instance.VersionSource(),
-		CustomVersion:         instance.CustomVersion,
-		ReleaseChannelName:    instance.ReleaseChannelName,
-		ResolvedImage:         instance.ResolvedImage,
-		ChannelNameFromStatus: instance.ChannelNameFromStatus,
+		ResourceProfile:         unleash.EffectiveResourceProfile(instance.ResourceProfile),
+		ResourceProfileExplicit: instance.ResourceProfile != "",
+		ResourceProfileMatches:  unleash.ResourcesMatchProfile(instance.Resources, instance.ResourceProfile),
+		ResolvedResources:       instance.Resources,
+		Name:                    instance.Name,
+		Namespace:               instance.Namespace,
+		CreatedAt:               instance.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Age:                     instance.Age(),
+		Version:                 instance.Version,
+		Status:                  instance.Status(),
+		StatusLabel:             instance.StatusLabel(),
+		APIUrl:                  instance.APIUrl,
+		WebUrl:                  instance.WebUrl,
+		VersionSource:           instance.VersionSource(),
+		CustomVersion:           instance.CustomVersion,
+		ReleaseChannelName:      instance.ReleaseChannelName,
+		ResolvedImage:           instance.ResolvedImage,
+		ChannelNameFromStatus:   instance.ChannelNameFromStatus,
 	}
 }
 

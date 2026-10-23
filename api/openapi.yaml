@@ -246,10 +246,26 @@ paths:
 
 components:
   schemas:
+    ResolvedResources:
+      type: object
+      description: Actual live Unleash container resources, not a claim that inherited small is enforced.
+      properties:
+        requests:
+          type: object
+          additionalProperties:
+            type: string
+        limits:
+          type: object
+          additionalProperties:
+            type: string
     UnleashConfigRequest:
       type: object
       description: Request body for creating or updating an Unleash instance
       properties:
+        resource_profile:
+          type: string
+          enum: [small, medium, large]
+          description: Explicit resource selection. Omission preserves existing ownership; empty and null are rejected. Selection requires BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED. Changing resources may roll out the Deployment.
         name:
           type: string
           description: Name of the Unleash instance
@@ -372,6 +388,21 @@ components:
         This is a Kubernetes resource managed by the unleasherator operator.
       x-kubernetes-resource: true
       properties:
+        resource_profile:
+          type: string
+          enum: [small, medium, large]
+          readOnly: true
+          description: Selected profile, or inherited small. Inheritance does not claim ownership of live resources.
+        resource_profile_explicit:
+          type: boolean
+          readOnly: true
+          description: Whether resource ownership was explicitly selected in desired intent.
+        resource_profile_matches:
+          type: boolean
+          readOnly: true
+          description: Whether live CPU request and memory request/limit match the profile mapping. Other resource keys and CPU limits remain live-owned.
+        resolved_resources:
+          $ref: '#/components/schemas/ResolvedResources'
         apiVersion:
           type: string
           example: unleash.nais.io/v1

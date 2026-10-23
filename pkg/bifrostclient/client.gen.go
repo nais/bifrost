@@ -17,6 +17,27 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for UnleashResourceProfile.
+const (
+	UnleashResourceProfileLarge  UnleashResourceProfile = "large"
+	UnleashResourceProfileMedium UnleashResourceProfile = "medium"
+	UnleashResourceProfileSmall  UnleashResourceProfile = "small"
+)
+
+// Valid indicates whether the value is a known member of the UnleashResourceProfile enum.
+func (e UnleashResourceProfile) Valid() bool {
+	switch e {
+	case UnleashResourceProfileLarge:
+		return true
+	case UnleashResourceProfileMedium:
+		return true
+	case UnleashResourceProfileSmall:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UnleashConfigRequestLogLevel.
 const (
 	Debug UnleashConfigRequestLogLevel = "debug"
@@ -38,6 +59,27 @@ func (e UnleashConfigRequestLogLevel) Valid() bool {
 	case Info:
 		return true
 	case Warn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UnleashConfigRequestResourceProfile.
+const (
+	UnleashConfigRequestResourceProfileLarge  UnleashConfigRequestResourceProfile = "large"
+	UnleashConfigRequestResourceProfileMedium UnleashConfigRequestResourceProfile = "medium"
+	UnleashConfigRequestResourceProfileSmall  UnleashConfigRequestResourceProfile = "small"
+)
+
+// Valid indicates whether the value is a known member of the UnleashConfigRequestResourceProfile enum.
+func (e UnleashConfigRequestResourceProfile) Valid() bool {
+	switch e {
+	case UnleashConfigRequestResourceProfileLarge:
+		return true
+	case UnleashConfigRequestResourceProfileMedium:
+		return true
+	case UnleashConfigRequestResourceProfileSmall:
 		return true
 	default:
 		return false
@@ -93,6 +135,12 @@ type ReleaseChannelResponse struct {
 	Version *string `json:"version,omitempty"`
 }
 
+// ResolvedResources Actual live Unleash container resources, not a claim that inherited small is enforced.
+type ResolvedResources struct {
+	Limits   *map[string]string `json:"limits,omitempty"`
+	Requests *map[string]string `json:"requests,omitempty"`
+}
+
 // Unleash Unleash CRD (Custom Resource Definition) representing an Unleash feature flag server instance.
 // This is a Kubernetes resource managed by the unleasherator operator.
 type Unleash struct {
@@ -103,6 +151,18 @@ type Unleash struct {
 		Name              *string    `json:"name,omitempty"`
 		Namespace         *string    `json:"namespace,omitempty"`
 	} `json:"metadata,omitempty"`
+
+	// ResolvedResources Actual live Unleash container resources, not a claim that inherited small is enforced.
+	ResolvedResources *ResolvedResources `json:"resolved_resources,omitempty"`
+
+	// ResourceProfile Selected profile, or inherited small. Inheritance does not claim ownership of live resources.
+	ResourceProfile *UnleashResourceProfile `json:"resource_profile,omitempty"`
+
+	// ResourceProfileExplicit Whether resource ownership was explicitly selected in desired intent.
+	ResourceProfileExplicit *bool `json:"resource_profile_explicit,omitempty"`
+
+	// ResourceProfileMatches Whether live CPU request and memory request/limit match the profile mapping. Other resource keys and CPU limits remain live-owned.
+	ResourceProfileMatches *bool `json:"resource_profile_matches,omitempty"`
 
 	// Spec Desired state of the Unleash instance
 	Spec *struct {
@@ -133,6 +193,9 @@ type Unleash struct {
 	} `json:"status,omitempty"`
 }
 
+// UnleashResourceProfile Selected profile, or inherited small. Inheritance does not claim ownership of live resources.
+type UnleashResourceProfile string
+
 // UnleashConfigRequest Request body for creating or updating an Unleash instance
 type UnleashConfigRequest struct {
 	// AllowedClusters Comma-separated list of allowed clusters for federation
@@ -158,10 +221,16 @@ type UnleashConfigRequest struct {
 
 	// ReleaseChannelName Name of the release channel to use for automatic version updates
 	ReleaseChannelName *string `json:"release_channel_name,omitempty"`
+
+	// ResourceProfile Explicit resource selection. Omission preserves existing ownership; empty and null are rejected. Selection requires BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED. Changing resources may roll out the Deployment.
+	ResourceProfile *UnleashConfigRequestResourceProfile `json:"resource_profile,omitempty"`
 }
 
 // UnleashConfigRequestLogLevel Log level for the Unleash instance
 type UnleashConfigRequestLogLevel string
+
+// UnleashConfigRequestResourceProfile Explicit resource selection. Omission preserves existing ownership; empty and null are rejected. Selection requires BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED. Changing resources may roll out the Deployment.
+type UnleashConfigRequestResourceProfile string
 
 // CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
 type CreateInstanceJSONRequestBody = UnleashConfigRequest

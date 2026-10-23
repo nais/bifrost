@@ -150,6 +150,18 @@ func (r *UnleashRepository) Get(ctx context.Context, name string) (*unleash.Inst
 
 // Create creates a new Unleash instance
 func (r *UnleashRepository) Create(ctx context.Context, cfg *unleash.Config) error {
+	if cfg.ResourceProfile != "" && !unleash.ValidResourceProfile(cfg.ResourceProfile) {
+		return fmt.Errorf("invalid resource profile")
+	}
+	if cfg.ResourceProfile != "" && !r.config.Unleash.ResourceProfilesEnabled {
+		return fmt.Errorf("resource profile selection is disabled")
+	}
+	// New instances acquire ownership; only existing absent selections inherit.
+	if cfg.ResourceProfile == "" {
+		copy := *cfg
+		copy.ResourceProfile = "small"
+		cfg = &copy
+	}
 	// Create FQDN network policy
 	netpolCreated, err := r.createFQDNNetworkPolicy(ctx, cfg.Name)
 	if err != nil {
@@ -191,6 +203,30 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	if err != nil {
 		return err
 	}
+	previous, err := LoadConfigFromCRD(unleashOld).Build()
+	if raw := unleashOld.GetAnnotations()[AnnotationDesiredState]; raw != "" {
+		previous, err = UnmarshalIntent(raw)
+		if err == nil {
+			err = previous.Validate()
+		}
+		if err == nil && previous.Name != cfg.Name {
+			err = fmt.Errorf("desired-state name does not match instance")
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("cannot update unreadable intent: %w", err)
+	}
+	merged := *cfg
+	if merged.ResourceProfile == "" {
+		merged.ResourceProfile = previous.ResourceProfile
+	}
+	cfg = &merged
+	if cfg.ResourceProfile != "" && !unleash.ValidResourceProfile(cfg.ResourceProfile) {
+		return fmt.Errorf("invalid resource profile")
+	}
+	if !r.config.Unleash.ResourceProfilesEnabled && cfg.ResourceProfile != previous.ResourceProfile {
+		return fmt.Errorf("resource profile selection is disabled")
+	}
 
 	// Determine old and new version sources for logging
 	oldVersionSource := "default"
@@ -208,12 +244,18 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	}
 
 	// Update FQDN network policy
-	if err := r.updateFQDNNetworkPolicy(ctx, cfg.Name); err != nil {
-		return err
+	if !profileOnlyChange(previous, cfg) {
+		if err := r.updateFQDNNetworkPolicy(ctx, cfg.Name); err != nil {
+			return err
+		}
 	}
 
 	// Build new CRD
 	unleashNew := BuildUnleashCRD(r.config, cfg)
+	if profileOnlyChange(previous, cfg) {
+		unleashNew.Spec = *unleashOld.Spec.DeepCopy()
+	}
+	MergeResourceOwnership(unleashOld, &unleashNew, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled)
 
 	// Keep the live object's metadata and lay bifrost's own fields back on top.
 	// The render only ever fills in name, namespace and bifrost's two managed
@@ -378,6 +420,10 @@ func (r *UnleashRepository) crdToInstance(crd *unleashv1.Unleash) *unleash.Insta
 		AllowedTeams:      getEnvVar(crd, "TEAMS_ALLOWED_TEAMS", ""),
 		AllowedNamespaces: utils.JoinNoEmpty(crd.Spec.Federation.Namespaces, ","),
 		AllowedClusters:   utils.JoinNoEmpty(crd.Spec.Federation.Clusters, ","),
+	}
+	instance.Resources = *crd.Spec.Resources.DeepCopy()
+	if intent, err := UnmarshalIntent(crd.GetAnnotations()[AnnotationDesiredState]); err == nil {
+		instance.ResourceProfile = intent.ResourceProfile
 	}
 
 	// Extract version source
@@ -703,9 +749,6 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 	const (
 		UnleashCustomImageRepo = "europe-north1-docker.pkg.dev/nais-io/nais/images/"
 		UnleashCustomImageName = "unleash-v4"
-		UnleashRequestCPU      = "100m"
-		UnleashRequestMemory   = "128Mi"
-		UnleashLimitMemory     = "256Mi"
 		SqlProxyRequestCPU     = "10m"
 		SqlProxyRequestMemory  = "100Mi"
 		SqlProxyLimitMemory    = "100Mi"
@@ -845,15 +888,7 @@ func BuildUnleashCRD(c *config.Config, cfg *unleash.Config) unleashv1.Unleash {
 				},
 			}},
 			ExistingServiceAccountName: c.Unleash.InstanceServiceaccount,
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse(UnleashRequestCPU),
-					corev1.ResourceMemory: resource.MustParse(UnleashRequestMemory),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceMemory: resource.MustParse(UnleashLimitMemory),
-				},
-			},
+			Resources:                  unleash.ProfileResources(cfg.ResourceProfile),
 		},
 	}
 

@@ -97,6 +97,10 @@ func (r *UnleashReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	desired := kubernetes.BuildUnleashCRD(r.config, cfg)
+	kubernetes.MergeResourceOwnership(crd, &desired, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled)
+	if kubernetes.IntentEqual(crd.GetAnnotations()[kubernetes.AnnotationDesiredState], desired.GetAnnotations()[kubernetes.AnnotationDesiredState]) {
+		desired.Annotations[kubernetes.AnnotationDesiredState] = crd.Annotations[kubernetes.AnnotationDesiredState]
+	}
 
 	state := r.inSync(crd, &desired)
 	if state.inSync {

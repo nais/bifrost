@@ -4,18 +4,22 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Instance represents an Unleash feature flag server instance
 type Instance struct {
-	Name      string
-	Namespace string
-	CreatedAt time.Time
-	Version   string
-	IsReady   bool
-	APIUrl    string
-	WebUrl    string
+	ResourceProfile string
+	Resources       corev1.ResourceRequirements
+	Name            string
+	Namespace       string
+	CreatedAt       time.Time
+	Version         string
+	IsReady         bool
+	APIUrl          string
+	WebUrl          string
 
 	// Version source configuration
 	CustomVersion      string

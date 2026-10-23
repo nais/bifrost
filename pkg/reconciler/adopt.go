@@ -196,6 +196,7 @@ func (r *UnleashReconciler) legacyAdoptionTarget(crd *unleashv1.Unleash) (*unlea
 	}
 	cfg.FederationNonce = crd.Spec.Federation.SecretNonce
 	target := kubernetes.BuildUnleashCRD(r.config, cfg)
+	kubernetes.MergeResourceOwnership(crd, &target, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled)
 	return &target, nil
 }
 
