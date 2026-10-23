@@ -203,6 +203,9 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	if err != nil {
 		return err
 	}
+	if cfg.ResourceProfile != "" && unleashOld.GetAnnotations()[AnnotationDesiredState] == "" {
+		return fmt.Errorf("resource profile selection requires recorded desired-state intent")
+	}
 	previous, err := LoadConfigFromCRD(unleashOld).Build()
 	if raw := unleashOld.GetAnnotations()[AnnotationDesiredState]; raw != "" {
 		previous, err = UnmarshalIntent(raw)
@@ -244,16 +247,20 @@ func (r *UnleashRepository) Update(ctx context.Context, cfg *unleash.Config, opt
 	}
 
 	// Update FQDN network policy
-	if !profileOnlyChange(previous, cfg) {
+	profileOnly := profileOnlyChange(previous, cfg)
+	if !profileOnly {
 		if err := r.updateFQDNNetworkPolicy(ctx, cfg.Name); err != nil {
 			return err
 		}
 	}
 
-	// Build new CRD
-	unleashNew := BuildUnleashCRD(r.config, cfg)
-	if profileOnlyChange(previous, cfg) {
-		unleashNew.Spec = *unleashOld.Spec.DeepCopy()
+	var unleashNew unleashv1.Unleash
+	if profileOnly {
+		// Rendering could mint a nonce; profile selection must not rotate credentials.
+		unleashNew = *unleashOld.DeepCopy()
+		stampManagedMetadata(&unleashNew, cfg)
+	} else {
+		unleashNew = BuildUnleashCRD(r.config, cfg)
 	}
 	MergeResourceOwnership(unleashOld, &unleashNew, cfg.ResourceProfile, r.config.Unleash.ResourceProfilesEnabled)
 

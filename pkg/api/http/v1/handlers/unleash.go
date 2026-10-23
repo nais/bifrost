@@ -330,20 +330,27 @@ func (h *UnleashHandler) UpdateInstance(c *gin.Context) {
 	builder.SetAllowedTeams(*desiredTeams)
 
 	config, err := builder.Build()
-	if err == nil && req.ProfileOnly {
+	if err == nil && req.ResourceProfile != nil {
 		live, readErr := h.service.GetCRD(ctx, name)
 		if readErr != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "read_failed", StatusCode: http.StatusInternalServerError})
 			return
 		}
-		if raw := live.GetAnnotations()[kubernetes.AnnotationDesiredState]; raw != "" {
-			config, err = kubernetes.UnmarshalIntent(raw)
-		} else {
-			config, err = kubernetes.LoadConfigFromCRD(live).Build()
-		}
+		var recorded *domainunleash.Config
+		recorded, err = kubernetes.UnmarshalIntent(live.GetAnnotations()[kubernetes.AnnotationDesiredState])
 		if err == nil {
+			err = recorded.Validate()
+		}
+		if err == nil && recorded.Name != name {
+			err = fmt.Errorf("desired-state name does not match instance")
+		}
+		if err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "recorded_intent_required", Message: "Resource profile selection requires valid recorded desired-state intent", StatusCode: http.StatusBadRequest})
+			return
+		}
+		if req.ProfileOnly {
+			config = recorded
 			config.ResourceProfile = *req.ResourceProfile
-			err = config.Validate()
 		}
 	}
 	if err != nil {

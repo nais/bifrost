@@ -69,6 +69,7 @@ func TestProfileIntroductionDoesNotWriteLegacyAnnotations(t *testing.T) {
 		live := renderManaged(t, "team-a")
 		var fields map[string]any
 		require.NoError(t, json.Unmarshal([]byte(live.Annotations[kubernetes.AnnotationDesiredState]), &fields))
+		fields["FederationNonce"] = ""
 		if version == 0 {
 			delete(fields, "schemaVersion")
 		} else {

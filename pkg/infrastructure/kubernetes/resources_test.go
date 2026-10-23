@@ -231,7 +231,7 @@ func TestVersionChannelChangesRetainResourceOwnershipWhenDisabled(t *testing.T) 
 }
 
 func TestProfileUpdateRefusesMalformedRecordedIntentWithoutWrites(t *testing.T) {
-	for _, raw := range []string{`null`, `{`, `{"schemaVersion":99}`, `{"schemaVersion":2,"ResourceProfile":null}`} {
+	for _, raw := range []string{"", `null`, `{`, `{"schemaVersion":99}`, `{"schemaVersion":2,"ResourceProfile":null}`} {
 		live, cfg := tunedInstance(t)
 		live.Annotations[AnnotationDesiredState] = raw
 		client := fake.NewClientBuilder().WithScheme(repoTestScheme(t)).WithObjects(live).Build()
