@@ -89,9 +89,7 @@ The table is provisional, **not capacity approval**. Selection and enforcement
 default off (`BIFROST_UNLEASH_RESOURCE_PROFILES_ENABLED=false`).
 Set `backend.unleash.resourceProfilesEnabled` in Helm/Fasit for the selected
 environment (default `false`; set back to `false` to disable safely).
-Review aggregate reservations and measured demand before activation, then validate on dev-nais,
-not nav. Verify the deployed revision and reconciler settings separately.
-Merging ships through ci-nais and tenant fan-out; it does not resize the fleet.
+Merging ships through ci-nais and tenant fan-out, with no manual hold before dev-nais.
 nais/api and Console selection are separate integration work (see #641/#640).
 
 Absent selection displays inherited small without acquiring resource ownership.
@@ -107,11 +105,30 @@ Explicit selection owns only CPU request and memory request/limit.
 It may roll out the Deployment; downsizing is not safe merely because an
 instantaneous memory reading is low.
 
-To disable safely, keep this compatibility build and set the flag false: existing
-profile intents remain readable, lifecycle/version changes keep live resources,
-and new selections and resource enforcement stop. Do **not** revert to a build
-that cannot read schema 2 or lacks ownership-aware writes, and do not rewrite
-fleet intents. Disabling does not resize instances back to small.
+Rollout is blocked pending the evidence in [#647](https://github.com/nais/bifrost/issues/647#issuecomment-6364771461):
+
+1. **Before merging the compatibility build**, verify deployed revisions/settings
+   and census raw intent schemas and field names, without printing intent payloads
+   or nonces. Unknown fields fail closed even with the flag false. Establish
+   compatibility evidence before the automatic canary/fan-out, not at a later dev-nais hold.
+2. Before enabling, inventory **all** persisted explicit profiles and actual
+   resources, including default small on new creates. Enabling can enforce every
+   mismatch and roll out instances, not just those selected through a UI. Approve
+   aggregate request reservations against capacity and measured demand.
+3. Quiesce in-flight version/channel transactions and competing autoscalers.
+   Disabling new migration admission alone does not stop existing transactions.
+4. Confirm the connected tenant interactively, then validate one tenant on dev-nais
+   first, not nav. Do not automate tenant switching or JITA. Real-kind tests prove
+   Bifrost HTTP/CRD/reconciler behavior, not Unleasherator Deployment Pod templates;
+   controller evidence is still required. Disabled `in_sync` is not profile compliance.
+5. To disable, set the Helm/Fasit flag false and retain this compatible build.
+   Existing intent/resources remain; new selection and enforcement stop. This
+   neither undoes a rollout nor permits a general binary rollback. The **first
+   create writes schema 2 even with the flag false**, so pre-schema-2 code is not
+   a safe revert. Do not rewrite fleet intents or resize back to small as rollback.
+
+Deployed configurations, census, capacity and upstream Pod-template behavior remain
+unverified; this plan is not rollout approval.
 
 ### Instance Response
 

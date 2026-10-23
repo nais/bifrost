@@ -57,6 +57,10 @@ run = "go test ./..."
 description = "Run tests with race detector"
 run = "go test -race ./..."
 
+[tasks.test-e2e]
+description = "Test deployed Bifrost against the guarded kind chart-testing cluster only"
+run = "go test -tags=kind_e2e -count=1 -timeout=3m ./tests/e2e"
+
 [tasks.test-coverage]
 description = "Run tests with coverage"
 run = "go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out -o coverage.html"
