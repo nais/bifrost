@@ -33,10 +33,15 @@ func TestProfileReconcileOwnershipAndDisable(t *testing.T) {
 				want := live.DeepCopy()
 				want.Spec.ApiIngress.Class = testConfig().Unleash.InstanceAPIIngressClass
 				kubernetes.MergeResourceOwnership(&live, want, profile, enabled)
+				// Merge patches omit empty slices, just as the API server does.
+				raw, err := json.Marshal(want)
+				require.NoError(t, err)
+				var storedWant unleashv1.Unleash
+				require.NoError(t, json.Unmarshal(raw, &storedWant))
 				require.NoError(t, reconcileOnce(r, &live))
 				after := &unleashv1.Unleash{}
 				require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(&live), after))
-				assert.Equal(t, want.Spec, after.Spec, "unrelated drift still converges while tuning survives")
+				assert.Equal(t, storedWant.Spec, after.Spec, "unrelated drift still converges while tuning survives")
 				require.NoError(t, reconcileOnce(r, after))
 				again := &unleashv1.Unleash{}
 				require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(after), again))
