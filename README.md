@@ -95,6 +95,8 @@ Merging ships through ci-nais and tenant fan-out; it does not resize the fleet.
 nais/api and Console selection are separate integration work (see #641/#640).
 
 Absent selection displays inherited small without acquiring resource ownership.
+Explicit selection on existing instances requires valid recorded desired-state
+intent; it never adopts an unannotated instance. Legacy adoption remains separate.
 Live tuning, CPU limits, extra resource keys, replicas and sidecar resources survive
 unrelated writes. Other managed sidecar fields (image, args and security settings)
 still reconcile; unknown live sidecars follow the rendered spec. Profile-only writes
