@@ -117,7 +117,7 @@ type UnleashConfig struct {
 	MigrationDelay         time.Duration `env:"BIFROST_UNLEASH_MIGRATION_DELAY,default=30s"`
 
 	// Channel migration settings for transitioning between release channels (e.g., v6 to v7)
-	// ChannelMigrationMap is a comma-separated list of source:target pairs, e.g. "stable-v6:stable-v7,rapid-v6:rapid-v7"
+	// ChannelMigrationMap is a comma-separated list of source:target pairs, e.g. "unleash-v6:unleash-v7,unleash-v7:unleash-v8"
 	ChannelMigrationEnabled       bool          `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_ENABLED,default=false"`
 	ChannelMigrationMap           string        `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_MAP"`
 	ChannelMigrationHealthTimeout time.Duration `env:"BIFROST_UNLEASH_CHANNEL_MIGRATION_HEALTH_TIMEOUT,default=5m"`
