@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.9"
+  PYTHON_VERSION: "3.13"
   HELM_VERSION: v3.11.2
   # Matches backend.image.repository in values.yaml and the tag in
   # ci/gcp-values.yaml, so the chart installs the image built here without the
