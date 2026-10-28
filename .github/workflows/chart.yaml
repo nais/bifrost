@@ -77,11 +77,15 @@ jobs:
         if: steps.list-changed.outputs.changed == 'true'
         run: |
           docker build -t "${IMAGE}" .
-          kind load docker-image "${IMAGE}" --name "${KIND_CLUSTER}"
           # Pre-loaded so the helm test does not depend on a registry pull from
           # inside the cluster.
           docker pull "${TEST_IMAGE}"
-          kind load docker-image "${TEST_IMAGE}" --name "${KIND_CLUSTER}"
+          # kind load docker-image imports all platforms and fails on multi-arch
+          # images where only one platform is present locally; save one platform.
+          for img in "${IMAGE}" "${TEST_IMAGE}"; do
+            docker save --platform linux/amd64 "$img" -o /tmp/img.tar
+            kind load image-archive /tmp/img.tar --name "${KIND_CLUSTER}"
+          done
 
       - name: Install cluster prerequisites
         if: steps.list-changed.outputs.changed == 'true'
