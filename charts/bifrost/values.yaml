@@ -99,7 +99,7 @@ backend:
     # This is useful for major version upgrades across all instances on a specific channel
     channelMigration:
       enabled: false
-      # Comma-separated list of source:target channel pairs, e.g. "stable-v6:stable-v7,rapid-v6:rapid-v7"
+      # Comma-separated list of source:target channel pairs, e.g. "unleash-v6:unleash-v7,unleash-v7:unleash-v8"
       map: ""
       healthTimeout: "5m"
       delay: "30s"

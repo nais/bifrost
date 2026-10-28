@@ -22,7 +22,7 @@ backend:
     # Channel migration example config (disabled by default)
     channelMigration:
       enabled: false
-      map: "stable-v6:stable-v7,rapid-v6:rapid-v7"
+      map: "unleash-v6:unleash-v7,unleash-v7:unleash-v8"
       healthTimeout: "5m"
       delay: "30s"
       maxCandidates: 1
